@@ -10,6 +10,7 @@ import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import io.quarkus.elytron.security.common.BcryptUtil;
 import io.smallrye.jwt.build.Jwt;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.transaction.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -20,6 +21,7 @@ public class AutenticarUsuarioUseCase {
     private static final Duration TOKEN_TTL = Duration.ofMinutes(60);
     private static final String ISSUER = "oficina-api";
 
+    @Transactional
     public AutenticarUsuarioResponse execute(AutenticarUsuarioRequest req) {
         if (req == null
                 || req.cpf() == null || req.cpf().trim().isEmpty()
