@@ -1,0 +1,140 @@
+name: CI/CD
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_unit_tests:
+    name: build-and-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+      - name: Build application and run unit tests
+        run: ./mvnw -B clean package -DskipITs=true -DfailIfNoTests=false
+
+  integration_tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+    needs: build_and_unit_tests
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Ensure mvnw is executable
+        run: chmod +x ./mvnw
+      - name: Run integration tests
+        run: ./mvnw -B verify -DskipITs=false -DfailIfNoTests=false
+
+  build_native_lambda:
+    name: build-native-lambda
+    runs-on: ubuntu-latest
+    needs: integration_tests
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Ensure build scripts are executable
+        run: |
+          chmod +x ./mvnw
+          chmod +x ./scripts/build-native-lambda.sh
+      - name: Build native Lambda package
+        run: ./scripts/build-native-lambda.sh -B -DskipTests -DskipITs=true -DfailIfNoTests=false
+      - name: Upload Lambda package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-native-package
+          path: |
+            target/function.zip
+            target/oficina-auth-lambda-native.zip
+          if-no-files-found: error
+
+  deploy_lambda:
+    name: deploy-lambda
+    runs-on: ubuntu-latest
+    needs: build_native_lambda
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+    environment:
+      name: lab
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION != '' && vars.AWS_REGION || 'us-east-1' }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      DB_INSTANCE_IDENTIFIER: ${{ vars.DB_INSTANCE_IDENTIFIER != '' && vars.DB_INSTANCE_IDENTIFIER || 'oficina-postgres' }}
+      DB_NAME: ${{ vars.DB_NAME }}
+      DB_SSLMODE: ${{ vars.DB_SSLMODE != '' && vars.DB_SSLMODE || 'require' }}
+      DB_SECURITY_GROUP_IDS: ${{ vars.DB_SECURITY_GROUP_IDS }}
+      LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME != '' && vars.LAMBDA_FUNCTION_NAME || 'OficinaAuthLambdaNative' }}
+      LAMBDA_RUNTIME: ${{ vars.LAMBDA_RUNTIME != '' && vars.LAMBDA_RUNTIME || 'provided.al2023' }}
+      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE != '' && vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_MEMORY_SIZE: ${{ vars.LAMBDA_MEMORY_SIZE != '' && vars.LAMBDA_MEMORY_SIZE || '256' }}
+      LAMBDA_TIMEOUT: ${{ vars.LAMBDA_TIMEOUT != '' && vars.LAMBDA_TIMEOUT || '15' }}
+      LAMBDA_VPC_ID: ${{ vars.LAMBDA_VPC_ID }}
+      LAMBDA_SUBNET_IDS: ${{ vars.LAMBDA_SUBNET_IDS }}
+      LAMBDA_SECURITY_GROUP_NAME: ${{ vars.LAMBDA_SECURITY_GROUP_NAME }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
+      QUARKUS_DATASOURCE_USERNAME: ${{ secrets.QUARKUS_DATASOURCE_USERNAME }}
+      QUARKUS_DATASOURCE_PASSWORD: ${{ secrets.QUARKUS_DATASOURCE_PASSWORD }}
+      QUARKUS_DATASOURCE_JDBC_URL: ${{ secrets.QUARKUS_DATASOURCE_JDBC_URL }}
+      MP_JWT_VERIFY_PUBLICKEY: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY }}
+      MP_JWT_VERIFY_PUBLICKEY_LOCATION: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY_LOCATION }}
+      SMALLRYE_JWT_SIGN_KEY: ${{ secrets.SMALLRYE_JWT_SIGN_KEY }}
+      SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download Lambda package
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-native-package
+          path: target
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION != '' && vars.AWS_REGION || 'us-east-1' }}
+      - name: Validate deploy inputs
+        run: |
+          missing=()
+          [[ -n "${EKS_CLUSTER_NAME}" ]] || missing+=("EKS_CLUSTER_NAME")
+          [[ -n "${LAMBDA_FUNCTION_NAME}" ]] || missing+=("LAMBDA_FUNCTION_NAME")
+          [[ -n "${QUARKUS_DATASOURCE_USERNAME}" ]] || missing+=("QUARKUS_DATASOURCE_USERNAME")
+          [[ -n "${QUARKUS_DATASOURCE_PASSWORD}" ]] || missing+=("QUARKUS_DATASOURCE_PASSWORD")
+
+          if [[ -z "${MP_JWT_VERIFY_PUBLICKEY}" && -z "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" ]]; then
+            missing+=("MP_JWT_VERIFY_PUBLICKEY|MP_JWT_VERIFY_PUBLICKEY_LOCATION")
+          fi
+
+          if [[ -z "${SMALLRYE_JWT_SIGN_KEY}" && -z "${SMALLRYE_JWT_SIGN_KEY_LOCATION}" ]]; then
+            missing+=("SMALLRYE_JWT_SIGN_KEY|SMALLRYE_JWT_SIGN_KEY_LOCATION")
+          fi
+
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "Missing GitHub Environment values: ${missing[*]}" >&2
+            exit 1
+          fi
+      - name: Deploy native Lambda
+        run: |
+          chmod +x ./scripts/deploy-native-lambda.sh
+          ./scripts/deploy-native-lambda.sh
