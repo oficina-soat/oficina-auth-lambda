@@ -107,16 +107,11 @@ jobs:
         with:
           name: lambda-native-package
           path: target
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION != '' && vars.AWS_REGION || 'us-east-1' }}
       - name: Validate deploy inputs
         run: |
           missing=()
+          [[ -n "${AWS_ACCESS_KEY_ID}" ]] || missing+=("AWS_ACCESS_KEY_ID")
+          [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || missing+=("AWS_SECRET_ACCESS_KEY")
           [[ -n "${EKS_CLUSTER_NAME}" ]] || missing+=("EKS_CLUSTER_NAME")
           [[ -n "${LAMBDA_FUNCTION_NAME}" ]] || missing+=("LAMBDA_FUNCTION_NAME")
           [[ -n "${QUARKUS_DATASOURCE_USERNAME}" ]] || missing+=("QUARKUS_DATASOURCE_USERNAME")
@@ -131,9 +126,16 @@ jobs:
           fi
 
           if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "Missing GitHub Environment values: ${missing[*]}" >&2
+            echo "Missing GitHub Environment values for environment 'lab': ${missing[*]}" >&2
             exit 1
           fi
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION != '' && vars.AWS_REGION || 'us-east-1' }}
       - name: Deploy native Lambda
         run: |
           chmod +x ./scripts/deploy-native-lambda.sh
