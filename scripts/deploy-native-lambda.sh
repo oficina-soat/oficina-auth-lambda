@@ -76,6 +76,18 @@ log() {
   printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
+fail_with_context() {
+  local status="$1"
+  local output="$2"
+  local hint="${3:-}"
+
+  echo "${output}" >&2
+  if [[ -n "${hint}" ]]; then
+    echo "${hint}" >&2
+  fi
+  exit "${status}"
+}
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Comando obrigatorio nao encontrado: $1" >&2
@@ -319,18 +331,34 @@ else
   require_non_empty "${LAMBDA_ROLE_ARN}" "LAMBDA_ROLE_ARN"
 
   log "Criando a Lambda ${LAMBDA_FUNCTION_NAME}"
-  aws --region "${AWS_REGION}" lambda create-function \
-    --function-name "${LAMBDA_FUNCTION_NAME}" \
-    --package-type Zip \
-    --zip-file "fileb://${ARTIFACT_PATH}" \
-    --runtime "${LAMBDA_RUNTIME}" \
-    --handler not.used.in.provided.runtime \
-    --role "${LAMBDA_ROLE_ARN}" \
-    --architectures "${LAMBDA_ARCHITECTURE}" \
-    --timeout "${LAMBDA_TIMEOUT}" \
-    --memory-size "${LAMBDA_MEMORY_SIZE}" \
-    --environment "file://${merged_env_file}" \
-    --vpc-config "${vpc_config}"
+  set +e
+  create_output="$(
+    aws --region "${AWS_REGION}" lambda create-function \
+      --function-name "${LAMBDA_FUNCTION_NAME}" \
+      --package-type Zip \
+      --zip-file "fileb://${ARTIFACT_PATH}" \
+      --runtime "${LAMBDA_RUNTIME}" \
+      --handler not.used.in.provided.runtime \
+      --role "${LAMBDA_ROLE_ARN}" \
+      --architectures "${LAMBDA_ARCHITECTURE}" \
+      --timeout "${LAMBDA_TIMEOUT}" \
+      --memory-size "${LAMBDA_MEMORY_SIZE}" \
+      --environment "file://${merged_env_file}" \
+      --vpc-config "${vpc_config}" 2>&1
+  )"
+  create_status=$?
+  set -e
+
+  if [[ ${create_status} -ne 0 ]]; then
+    if grep -q "iam:PassRole" <<<"${create_output}"; then
+      fail_with_context \
+        "${create_status}" \
+        "${create_output}" \
+        "A identidade usada no deploy nao pode executar iam:PassRole na role ${LAMBDA_ROLE_ARN}. Conceda iam:PassRole para essa role ou faca o primeiro provisionamento da Lambda com uma identidade que tenha essa permissao."
+    fi
+
+    fail_with_context "${create_status}" "${create_output}"
+  fi
 fi
 
 aws --region "${AWS_REGION}" lambda wait function-active \
