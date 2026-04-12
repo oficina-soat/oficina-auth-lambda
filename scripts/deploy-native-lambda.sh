@@ -306,6 +306,18 @@ jq -n \
 vpc_config="SubnetIds=${LAMBDA_SUBNET_IDS},SecurityGroupIds=${lambda_sg_id}"
 
 if [[ "${function_exists}" == "true" ]]; then
+  current_architecture="$(
+    aws --region "${AWS_REGION}" lambda get-function \
+      --function-name "${LAMBDA_FUNCTION_NAME}" \
+      --query 'Configuration.Architectures[0]' \
+      --output text
+  )"
+
+  if [[ -n "${current_architecture}" && "${current_architecture}" != "None" && "${current_architecture}" != "${LAMBDA_ARCHITECTURE}" ]]; then
+    echo "A Lambda ${LAMBDA_FUNCTION_NAME} ja existe com arquitetura ${current_architecture}, mas o deploy solicitou ${LAMBDA_ARCHITECTURE}. Atualize a arquitetura manualmente ou recrie a funcao antes de seguir." >&2
+    exit 1
+  fi
+
   log "Atualizando codigo da Lambda ${LAMBDA_FUNCTION_NAME}"
   aws --region "${AWS_REGION}" lambda update-function-code \
     --function-name "${LAMBDA_FUNCTION_NAME}" \
@@ -319,7 +331,6 @@ if [[ "${function_exists}" == "true" ]]; then
     --function-name "${LAMBDA_FUNCTION_NAME}" \
     --runtime "${LAMBDA_RUNTIME}" \
     --handler not.used.in.provided.runtime \
-    --architectures "${LAMBDA_ARCHITECTURE}" \
     --timeout "${LAMBDA_TIMEOUT}" \
     --memory-size "${LAMBDA_MEMORY_SIZE}" \
     --environment "file://${merged_env_file}" \
