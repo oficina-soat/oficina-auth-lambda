@@ -73,7 +73,7 @@ jobs:
     permissions:
       contents: read
     environment:
-      name: lab
+      name: hml
     env:
       AWS_REGION: ${{ vars.AWS_REGION != '' && vars.AWS_REGION || 'us-east-1' }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
@@ -126,7 +126,7 @@ jobs:
           fi
 
           if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "Missing GitHub Environment values for environment 'lab': ${missing[*]}" >&2
+            echo "Missing GitHub Environment values for environment 'hml': ${missing[*]}" >&2
             exit 1
           fi
       - name: Configure AWS credentials
