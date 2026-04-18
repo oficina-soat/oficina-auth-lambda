@@ -5,6 +5,8 @@ import br.com.oficina.autenticacao.domain.exceptions.UsuarioInativoException;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import com.amazonaws.services.lambda.runtime.Context;
+import com.amazonaws.services.lambda.runtime.events.APIGatewayV2HTTPEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logmanager.ExtHandler;
 import org.jboss.logmanager.ExtLogRecord;
 import org.junit.jupiter.api.Test;
@@ -22,8 +24,10 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 class UsuarioLambdaResourceTest {
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     @Test
-    void shouldReturnResponseFromHandleRequest() {
+    void shouldReturnResponseFromAuthentication() {
         AutenticarUsuarioRequest request = new AutenticarUsuarioRequest("84191404067", "secret");
         AutenticarUsuarioResponse expected = new AutenticarUsuarioResponse("token", "Bearer", 3600);
         AutenticarUsuarioUseCase useCase = Mockito.mock(AutenticarUsuarioUseCase.class);
@@ -31,14 +35,56 @@ class UsuarioLambdaResourceTest {
 
         Mockito.doReturn(expected).when(useCase).execute(request);
 
-        AutenticarUsuarioResponse response = resource.handleRequest(request, null);
+        AutenticarUsuarioResponse response = resource.autenticar(request, null);
 
         assertSame(expected, response);
         Mockito.verify(useCase).execute(request);
     }
 
     @Test
-    void shouldRethrowRuntimeExceptionFromHandleRequest() {
+    void shouldReturnApiGatewayResponseFromHandleRequest() throws Exception {
+        AutenticarUsuarioRequest request = new AutenticarUsuarioRequest("84191404067", "secret");
+        AutenticarUsuarioResponse expected = new AutenticarUsuarioResponse("token", "Bearer", 3600);
+        AutenticarUsuarioUseCase useCase = Mockito.mock(AutenticarUsuarioUseCase.class);
+        UsuarioLambdaResource resource = new UsuarioLambdaResource(useCase);
+        APIGatewayV2HTTPEvent event = new APIGatewayV2HTTPEvent();
+        event.setBody(OBJECT_MAPPER.writeValueAsString(request));
+
+        Mockito.doReturn(expected).when(useCase).execute(request);
+
+        var response = resource.handleRequest(event, null);
+        var body = OBJECT_MAPPER.readValue(response.getBody(), AutenticarUsuarioResponse.class);
+
+        assertEquals(200, response.getStatusCode());
+        assertEquals("application/json", response.getHeaders().get("content-type"));
+        assertEquals(expected, body);
+        Mockito.verify(useCase).execute(request);
+    }
+
+    @Test
+    void shouldReturnUnauthorizedApiGatewayResponseForAuthenticationFailure() throws Exception {
+        AutenticarUsuarioUseCase useCase = Mockito.mock(AutenticarUsuarioUseCase.class);
+        UsuarioLambdaResource resource = new UsuarioLambdaResource(useCase);
+        UsuarioInativoException failure = new UsuarioInativoException();
+        APIGatewayV2HTTPEvent event = new APIGatewayV2HTTPEvent();
+        event.setBody("""
+                {
+                  "cpf": "84191404067",
+                  "password": "secret"
+                }
+                """);
+
+        Mockito.doThrow(failure).when(useCase).execute(Mockito.any());
+
+        var response = resource.handleRequest(event, null);
+
+        assertEquals(401, response.getStatusCode());
+        assertEquals("application/json", response.getHeaders().get("content-type"));
+        assertEquals("Usuário inativo", OBJECT_MAPPER.readTree(response.getBody()).get("motivo").asText());
+    }
+
+    @Test
+    void shouldRethrowRuntimeExceptionFromAuthentication() {
         AutenticarUsuarioUseCase useCase = Mockito.mock(AutenticarUsuarioUseCase.class);
         UsuarioLambdaResource resource = new UsuarioLambdaResource(useCase);
         RuntimeException failure = new IllegalStateException("boom");
@@ -50,7 +96,7 @@ class UsuarioLambdaResourceTest {
 
             RuntimeException exception = assertThrowsInChain(
                     RuntimeException.class,
-                    () -> resource.handleRequest(new AutenticarUsuarioRequest("84191404067", "secret"), null));
+                    () -> resource.autenticar(new AutenticarUsuarioRequest("84191404067", "secret"), null));
 
             assertSame(failure, exception);
             assertEquals(List.of("Falha inesperada ao autenticar usuario. requestId=N/A"), capture.messages(Level.SEVERE));
@@ -59,7 +105,7 @@ class UsuarioLambdaResourceTest {
     }
 
     @Test
-    void shouldWrapCheckedExceptionFromHandleRequest() {
+    void shouldWrapCheckedExceptionFromAuthentication() {
         AutenticarUsuarioUseCase useCase = Mockito.mock(AutenticarUsuarioUseCase.class);
         UsuarioLambdaResource resource = new UsuarioLambdaResource(useCase);
         IOException failure = new IOException("io failure");
@@ -71,7 +117,7 @@ class UsuarioLambdaResourceTest {
 
             RuntimeException exception = assertThrowsInChain(
                     RuntimeException.class,
-                    () -> resource.handleRequest(new AutenticarUsuarioRequest("84191404067", "secret"), null));
+                    () -> resource.autenticar(new AutenticarUsuarioRequest("84191404067", "secret"), null));
 
             assertSame(failure, exception.getCause());
             assertEquals(List.of("Falha inesperada ao autenticar usuario. requestId=N/A"), capture.messages(Level.SEVERE));
@@ -80,7 +126,7 @@ class UsuarioLambdaResourceTest {
     }
 
     @Test
-    void shouldLogAuthenticationReasonFromHandleRequest() {
+    void shouldLogAuthenticationReasonFromAuthentication() {
         AutenticarUsuarioUseCase useCase = Mockito.mock(AutenticarUsuarioUseCase.class);
         UsuarioLambdaResource resource = new UsuarioLambdaResource(useCase);
         UsuarioInativoException failure = new UsuarioInativoException();
@@ -95,7 +141,7 @@ class UsuarioLambdaResourceTest {
 
             UsuarioInativoException exception = assertThrowsInChain(
                     UsuarioInativoException.class,
-                    () -> resource.handleRequest(new AutenticarUsuarioRequest("84191404067", "secret"), context));
+                    () -> resource.autenticar(new AutenticarUsuarioRequest("84191404067", "secret"), context));
 
             assertSame(failure, exception);
             assertEquals(List.of("Autenticacao nao concluida. requestId=req-123 motivo=Usuário inativo"),

@@ -7,11 +7,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ARTIFACT_PATH="${ARTIFACT_PATH:-${REPO_ROOT}/target/function.zip}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
-DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres}"
+DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
 DB_NAME_OVERRIDE="${DB_NAME:-${QUARKUS_DATASOURCE_DB_NAME:-}}"
 DB_SSLMODE="${DB_SSLMODE:-require}"
 DB_SECURITY_GROUP_IDS="${DB_SECURITY_GROUP_IDS:-}"
-LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-}"
+LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-oficina-auth-lambda-lab}"
 LAMBDA_RUNTIME="${LAMBDA_RUNTIME:-provided.al2023}"
 LAMBDA_ARCHITECTURE="${LAMBDA_ARCHITECTURE:-x86_64}"
 LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-256}"
@@ -27,6 +27,12 @@ MP_JWT_VERIFY_PUBLICKEY="${MP_JWT_VERIFY_PUBLICKEY:-}"
 MP_JWT_VERIFY_PUBLICKEY_LOCATION="${MP_JWT_VERIFY_PUBLICKEY_LOCATION:-}"
 SMALLRYE_JWT_SIGN_KEY="${SMALLRYE_JWT_SIGN_KEY:-}"
 SMALLRYE_JWT_SIGN_KEY_LOCATION="${SMALLRYE_JWT_SIGN_KEY_LOCATION:-}"
+ATTACH_API_GATEWAY="${ATTACH_API_GATEWAY:-true}"
+API_GATEWAY_ID="${API_GATEWAY_ID:-}"
+API_GATEWAY_NAME="${API_GATEWAY_NAME:-${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}}"
+API_GATEWAY_ROUTE_KEY="${API_GATEWAY_ROUTE_KEY:-POST /auth}"
+API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
+API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
 
 current_env_file=""
 desired_env_file=""
@@ -56,7 +62,7 @@ Variaveis obrigatorias:
 
 Variaveis opcionais:
   ARTIFACT_PATH                Zip da Lambda. Default: target/function.zip
-  DB_INSTANCE_IDENTIFIER       Identificador do RDS. Default: oficina-postgres
+  DB_INSTANCE_IDENTIFIER       Identificador do RDS. Default: oficina-postgres-lab
   DB_NAME ou QUARKUS_DATASOURCE_DB_NAME
   DB_SSLMODE                   Default: require
   DB_SECURITY_GROUP_IDS        Lista CSV ou JSON de security groups do RDS
@@ -69,6 +75,12 @@ Variaveis opcionais:
   LAMBDA_SUBNET_IDS            Lista CSV ou JSON de subnets
   LAMBDA_SECURITY_GROUP_NAME   Default: <LAMBDA_FUNCTION_NAME>-sg
   QUARKUS_DATASOURCE_JDBC_URL  Override completo do JDBC URL
+  ATTACH_API_GATEWAY           Vincula a Lambda ao HTTP API. Default: true
+  API_GATEWAY_ID               ID do HTTP API existente
+  API_GATEWAY_NAME             Nome do HTTP API existente. Default: <EKS_CLUSTER_NAME>-http-api
+  API_GATEWAY_ROUTE_KEY        Route key. Default: POST /auth
+  API_GATEWAY_PAYLOAD_FORMAT_VERSION Default: 2.0
+  API_GATEWAY_TIMEOUT_MILLISECONDS   Default: 30000
 EOF
 }
 
@@ -177,6 +189,133 @@ authorize_db_ingress() {
   exit "${status}"
 }
 
+resolve_api_gateway_id() {
+  if [[ -n "${API_GATEWAY_ID}" ]]; then
+    printf '%s' "${API_GATEWAY_ID}"
+    return
+  fi
+
+  require_non_empty "${API_GATEWAY_NAME}" "API_GATEWAY_NAME"
+
+  aws_json apigatewayv2 get-apis \
+    --query 'Items[].{ApiId:ApiId,Name:Name}' |
+    jq -r --arg name "${API_GATEWAY_NAME}" '[.[] | select(.Name == $name) | .ApiId][0] // empty'
+}
+
+route_integration_id() {
+  local api_id="$1"
+  local route_key="$2"
+
+  aws_json apigatewayv2 get-routes --api-id "${api_id}" \
+    --query 'Items[].{RouteId:RouteId,RouteKey:RouteKey,Target:Target}' |
+    jq -r --arg route_key "${route_key}" '
+      [.[] | select(.RouteKey == $route_key) | .Target][0] // "" |
+      sub("^integrations/"; "")
+    '
+}
+
+route_id() {
+  local api_id="$1"
+  local route_key="$2"
+
+  aws_json apigatewayv2 get-routes --api-id "${api_id}" \
+    --query 'Items[].{RouteId:RouteId,RouteKey:RouteKey}' |
+    jq -r --arg route_key "${route_key}" '[.[] | select(.RouteKey == $route_key) | .RouteId][0] // empty'
+}
+
+create_api_gateway_integration() {
+  local api_id="$1"
+  local function_arn="$2"
+
+  aws --region "${AWS_REGION}" apigatewayv2 create-integration \
+    --api-id "${api_id}" \
+    --integration-type AWS_PROXY \
+    --integration-method POST \
+    --integration-uri "${function_arn}" \
+    --payload-format-version "${API_GATEWAY_PAYLOAD_FORMAT_VERSION}" \
+    --timeout-in-millis "${API_GATEWAY_TIMEOUT_MILLISECONDS}" \
+    --query 'IntegrationId' \
+    --output text
+}
+
+ensure_api_gateway_integration() {
+  if [[ "${ATTACH_API_GATEWAY}" != "true" ]]; then
+    log "Vinculo com API Gateway desabilitado por ATTACH_API_GATEWAY=${ATTACH_API_GATEWAY}"
+    return
+  fi
+
+  local api_id
+  api_id="$(resolve_api_gateway_id)"
+  require_non_empty "${api_id}" "API_GATEWAY_ID"
+
+  local function_arn
+  function_arn="$(
+    aws --region "${AWS_REGION}" lambda get-function \
+      --function-name "${LAMBDA_FUNCTION_NAME}" \
+      --query 'Configuration.FunctionArn' \
+      --output text
+  )"
+  require_non_empty "${function_arn}" "function_arn"
+
+  log "Garantindo rota ${API_GATEWAY_ROUTE_KEY} no API Gateway ${api_id}"
+  local integration_id
+  integration_id="$(route_integration_id "${api_id}" "${API_GATEWAY_ROUTE_KEY}")"
+
+  if [[ -n "${integration_id}" ]]; then
+    aws --region "${AWS_REGION}" apigatewayv2 update-integration \
+      --api-id "${api_id}" \
+      --integration-id "${integration_id}" \
+      --integration-type AWS_PROXY \
+      --integration-method POST \
+      --integration-uri "${function_arn}" \
+      --payload-format-version "${API_GATEWAY_PAYLOAD_FORMAT_VERSION}" \
+      --timeout-in-millis "${API_GATEWAY_TIMEOUT_MILLISECONDS}" >/dev/null
+  else
+    integration_id="$(create_api_gateway_integration "${api_id}" "${function_arn}")"
+  fi
+
+  local existing_route_id
+  existing_route_id="$(route_id "${api_id}" "${API_GATEWAY_ROUTE_KEY}")"
+
+  if [[ -n "${existing_route_id}" ]]; then
+    aws --region "${AWS_REGION}" apigatewayv2 update-route \
+      --api-id "${api_id}" \
+      --route-id "${existing_route_id}" \
+      --target "integrations/${integration_id}" >/dev/null
+  else
+    aws --region "${AWS_REGION}" apigatewayv2 create-route \
+      --api-id "${api_id}" \
+      --route-key "${API_GATEWAY_ROUTE_KEY}" \
+      --target "integrations/${integration_id}" >/dev/null
+  fi
+
+  local account_id
+  account_id="$(
+    aws --region "${AWS_REGION}" sts get-caller-identity \
+      --query Account \
+      --output text
+  )"
+  local source_arn="arn:aws:execute-api:${AWS_REGION}:${account_id}:${api_id}/*/*"
+  local statement_id
+  statement_id="AllowExecutionFromApiGateway$(printf '%s' "${api_id}-${API_GATEWAY_ROUTE_KEY}" | md5sum | cut -c1-8)"
+
+  set +e
+  permission_output="$(
+    aws --region "${AWS_REGION}" lambda add-permission \
+      --function-name "${LAMBDA_FUNCTION_NAME}" \
+      --statement-id "${statement_id}" \
+      --action lambda:InvokeFunction \
+      --principal apigateway.amazonaws.com \
+      --source-arn "${source_arn}" 2>&1
+  )"
+  permission_status=$?
+  set -e
+
+  if [[ ${permission_status} -ne 0 ]] && ! grep -q "ResourceConflictException" <<<"${permission_output}"; then
+    fail_with_context "${permission_status}" "${permission_output}"
+  fi
+}
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   usage
   exit 0
@@ -184,6 +323,7 @@ fi
 
 require_cmd aws
 require_cmd jq
+require_cmd md5sum
 require_non_empty "${AWS_REGION}" "AWS_REGION"
 require_non_empty "${EKS_CLUSTER_NAME}" "EKS_CLUSTER_NAME"
 require_non_empty "${LAMBDA_FUNCTION_NAME}" "LAMBDA_FUNCTION_NAME"
@@ -374,5 +514,7 @@ fi
 
 aws --region "${AWS_REGION}" lambda wait function-active \
   --function-name "${LAMBDA_FUNCTION_NAME}"
+
+ensure_api_gateway_integration
 
 log "Deploy concluido para ${LAMBDA_FUNCTION_NAME}"

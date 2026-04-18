@@ -49,7 +49,7 @@ class UsuarioLambdaResourceQuarkusTest {
     void shouldAuthenticateFromLambdaHandlerWithoutActiveRequestContext() throws Exception {
         UsuarioLambdaResource resource = new UsuarioLambdaResource(autenticarUsuarioUseCase);
 
-        var response = invokeWithoutRequestContext(() -> resource.handleRequest(
+        var response = invokeWithoutRequestContext(() -> resource.autenticar(
                 new AutenticarUsuarioRequest(DOCUMENTO_ATIVO, SENHA_CORRETA),
                 null));
         var token = jwtParser.parse(response.access_token());
@@ -66,7 +66,7 @@ class UsuarioLambdaResourceQuarkusTest {
 
         Throwable thrown = assertThrows(
                 Throwable.class,
-                () -> invokeWithoutRequestContext(() -> resource.handleRequest(
+                () -> invokeWithoutRequestContext(() -> resource.autenticar(
                         new AutenticarUsuarioRequest(DOCUMENTO_ATIVO, "senha-incorreta"),
                         null)));
 

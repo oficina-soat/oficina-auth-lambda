@@ -10,6 +10,7 @@
 
     <properties>
         <compiler-plugin.version>3.14.1</compiler-plugin.version>
+        <aws-lambda-java-events.version>3.16.1</aws-lambda-java-events.version>
         <failsafe-plugin.version>3.5.4</failsafe-plugin.version>
         <jacoco-plugin.version>0.8.13</jacoco-plugin.version>
         <maven.compiler.release>21</maven.compiler.release>
@@ -42,6 +43,11 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-amazon-lambda</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-events</artifactId>
+            <version>${aws-lambda-java-events.version}</version>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
