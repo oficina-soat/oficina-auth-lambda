@@ -20,12 +20,12 @@ Os workflows que alteram a Lambda compartilham o grupo de `concurrency` `lab-lam
 
 ## Armazenamento do build nativo
 
-Os workflows `CI/CD` e `Redeploy Lambda Lab` usam S3 para armazenar:
+Os workflows `CI/CD` e `Redeploy Lambda Lab` podem usar S3 para armazenar:
 
 - `target/function.zip`
 - `target/oficina-auth-lambda-native.zip`
 
-O bucket é definido por `LAMBDA_ARTIFACT_BUCKET`. Se essa variable não for informada, o workflow tenta usar `TF_STATE_BUCKET`.
+O bucket é definido por `LAMBDA_ARTIFACT_BUCKET`. Se essa variable não for informada, o workflow tenta usar `TF_STATE_BUCKET`. Quando nenhum dos dois valores existe, o workflow pula o cache S3 e executa o build nativo normalmente.
 
 A chave dos objetos é:
 
@@ -38,11 +38,11 @@ O prefixo default é `oficina/lab/lambda/oficina-auth-lambda`.
 
 Isso significa que:
 
-- o primeiro deploy de um commit novo executa o build nativo e salva o pacote no S3
-- um redeploy manual do mesmo commit restaura o pacote do S3 e pula o build nativo
+- o primeiro deploy de um commit novo executa o build nativo e, quando o bucket estiver configurado, salva o pacote no S3
+- um redeploy manual do mesmo commit restaura o pacote do S3 e pula o build nativo, quando o bucket estiver configurado
 - qualquer commit novo gera uma chave nova e força um novo build nativo
 
-O deploy continua usando o artifact `lambda-native-package` gerado ou restaurado no próprio workflow. O S3 serve como armazenamento durável entre execuções.
+O deploy continua usando o artifact `lambda-native-package` gerado ou restaurado no próprio workflow. O S3 serve como armazenamento durável entre execuções, mas é opcional.
 
 ## Autenticação AWS
 
@@ -83,7 +83,7 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 - `LAMBDA_VPC_ID`: override opcional
 - `LAMBDA_SUBNET_IDS`: lista CSV ou JSON, override opcional
 - `LAMBDA_SECURITY_GROUP_NAME`: default `<LAMBDA_FUNCTION_NAME>-sg`
-- `LAMBDA_ARTIFACT_BUCKET`: bucket S3 para armazenar o pacote nativo; fallback para `TF_STATE_BUCKET`
+- `LAMBDA_ARTIFACT_BUCKET`: bucket S3 opcional para armazenar o pacote nativo; fallback para `TF_STATE_BUCKET`
 - `LAMBDA_ARTIFACT_PREFIX`: prefixo S3 dos pacotes nativos. Default `oficina/lab/lambda/oficina-auth-lambda`
 
 ## Variables do API Gateway

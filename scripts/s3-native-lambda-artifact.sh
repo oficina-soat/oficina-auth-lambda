@@ -17,7 +17,7 @@ Uso:
 
 Variaveis:
   AWS_REGION
-  LAMBDA_ARTIFACT_BUCKET ou TF_STATE_BUCKET
+  LAMBDA_ARTIFACT_BUCKET ou TF_STATE_BUCKET (opcional para restore; obrigatorio para store)
   LAMBDA_ARTIFACT_PREFIX       Default: oficina/lab/lambda/oficina-auth-lambda
   LAMBDA_ARTIFACT_VERSION      Default: GITHUB_SHA
   LAMBDA_ARTIFACT_QUALIFIER    Default: LAMBDA_ARCHITECTURE ou x86_64
@@ -95,6 +95,15 @@ restore_artifacts() {
   local function_uri
   local named_uri
 
+  if [[ -z "${LAMBDA_ARTIFACT_BUCKET}" ]]; then
+    log "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; cache S3 desabilitado"
+    set_output restored false
+    return
+  fi
+
+  require_cmd aws
+  require_non_empty "${LAMBDA_ARTIFACT_VERSION}" "LAMBDA_ARTIFACT_VERSION"
+
   function_uri="$(s3_uri function.zip)"
   named_uri="$(s3_uri oficina-auth-lambda-native.zip)"
 
@@ -121,6 +130,7 @@ restore_artifacts() {
 store_artifacts() {
   require_non_empty "${LAMBDA_ARTIFACT_BUCKET}" "LAMBDA_ARTIFACT_BUCKET"
   require_non_empty "${LAMBDA_ARTIFACT_VERSION}" "LAMBDA_ARTIFACT_VERSION"
+  require_cmd aws
 
   if [[ ! -f "${FUNCTION_ARTIFACT_PATH}" ]]; then
     echo "Artefato nao encontrado: ${FUNCTION_ARTIFACT_PATH}" >&2
@@ -143,10 +153,7 @@ if [[ "${COMMAND}" == "-h" || "${COMMAND}" == "--help" || -z "${COMMAND}" ]]; th
   exit 0
 fi
 
-require_cmd aws
 require_non_empty "${AWS_REGION}" "AWS_REGION"
-require_non_empty "${LAMBDA_ARTIFACT_BUCKET}" "LAMBDA_ARTIFACT_BUCKET"
-require_non_empty "${LAMBDA_ARTIFACT_VERSION}" "LAMBDA_ARTIFACT_VERSION"
 
 case "${COMMAND}" in
   restore)
