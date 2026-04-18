@@ -1,32 +1,69 @@
 # oficina-auth-lambda
 
-Projeto standalone para o lambda de autenticação da Oficina.
+Lambda standalone de autenticação da Oficina, publicada em runtime nativo do Quarkus e exposta pelo HTTP API Gateway do laboratório.
 
-Esta árvore extrai o pacote `administrativo` do monólito e leva junto apenas o que ele realmente precisa para funcionar de forma isolada:
+O projeto isola o fluxo de autenticação que antes ficava acoplado ao monólito:
 
-- `br.com.oficina.administrativo`
-- tipos compartilhados mínimos de `br.com.oficina.common.web`
-- configuração Quarkus para JWT e PostgreSQL
-- seed mínima de usuários para dev/test
-- testes do fluxo de autenticação
+- handler AWS Lambda para autenticar usuário por CPF e senha
+- integração com PostgreSQL/RDS privado do ambiente `oficina-infra-db`
+- publicação por HTTP API Gateway do ambiente `oficina-infra-k8s`
+- emissão de JWT com SmallRye JWT
+- testes unitários e de integração com H2
+- pipeline que em `develop` executa apenas testes e em `main` executa testes, build nativo e deploy
 
-## Runtime
+## O que este projeto gerencia
 
-O projeto usa Quarkus sobre AWS Lambda com handler nativo da extensão `quarkus-amazon-lambda`.
+- pacote nativo da Lambda (`target/function.zip`)
+- função AWS Lambda
+- security group dedicado da Lambda
+- liberação do security group da Lambda no security group do RDS
+- rota `AWS_PROXY` no HTTP API Gateway existente, quando `ATTACH_API_GATEWAY=true`
+- log group da Lambda no cleanup manual
 
-## Decisões arquiteturais
+## O que este projeto não gerencia
 
-### Acesso a banco bloqueante neste lambda
+- criação do RDS PostgreSQL
+- criação do API Gateway
+- criação da VPC/subnets compartilhadas
+- criação de roles IAM do laboratório
+- migrations completas do schema da aplicação
 
-Este projeto usa acesso bloqueante ao PostgreSQL com `hibernate-orm-panache` e `jdbc-postgresql`.
+Esses recursos ficam nos repositórios irmãos:
 
-A decisão foi tomada porque a entrada da aplicação é um `RequestHandler` de AWS Lambda, portanto o fluxo já nasce e termina de forma síncrona dentro de cada invocação. Nesse contexto, manter o banco reativo acrescentava complexidade operacional e de código sem capturar um ganho relevante de throughput.
+- `../oficina-infra-db`: RDS PostgreSQL e bootstrap opcional de usuário/secret
+- `../oficina-infra-k8s`: EKS, VPC compartilhada, ECR e HTTP API Gateway
 
-No projeto anterior, antes da separação deste lambda, o modelo reativo fazia mais sentido porque o módulo ainda estava inserido em um contexto maior, com fronteiras e composições que justificavam esse estilo. Depois da extração para um lambda isolado de autenticação, com uma chamada curta e objetiva ao banco, o modelo bloqueante passou a ser a opção mais simples e coerente.
+## Convenções padronizadas com os repos de infra
 
-## Contrato da Lambda
+- ambiente GitHub Actions: `lab`
+- nome padrão da infra compartilhada: `eks-lab`
+- banco padrão: `oficina-postgres-lab`
+- API Gateway padrão: `<EKS_CLUSTER_NAME>-http-api`
+- função padrão: `oficina-auth-lambda-lab`
+- rota padrão no gateway: `POST /auth`
+- runtime Lambda padrão: `provided.al2023`
 
-O projeto expõe um handler AWS Lambda e não um recurso HTTP JAX-RS. A entrada é um JSON compatível com `AutenticarUsuarioRequest`:
+## Estrutura
+
+- `src/main/java`: domínio, persistência e handler Lambda
+- `src/test/java`: testes unitários e de integração
+- `src/main/resources/application.properties`: configuração Quarkus por perfil
+- `scripts/build-native-lambda.sh`: build nativo do pacote Lambda
+- `scripts/deploy-native-lambda.sh`: cria/atualiza Lambda, RDS SG e rota do API Gateway
+- `scripts/cleanup-lambda.sh`: remove somente recursos operacionais da Lambda
+- `.github/workflows/ci.yml`: CI/CD principal
+- `.github/workflows/redeploy-lambda-lab.yml`: redeploy manual da Lambda
+- `.github/workflows/cleanup-lambda-lab.yml`: cleanup manual da Lambda
+
+## Contrato HTTP
+
+Quando publicado pelo API Gateway, o endpoint padrão é:
+
+```text
+POST /auth
+```
+
+Entrada:
 
 ```json
 {
@@ -35,7 +72,7 @@ O projeto expõe um handler AWS Lambda e não um recurso HTTP JAX-RS. A entrada 
 }
 ```
 
-A saída segue `AutenticarUsuarioResponse`:
+Resposta de sucesso:
 
 ```json
 {
@@ -45,174 +82,117 @@ A saída segue `AutenticarUsuarioResponse`:
 }
 ```
 
-## Estrutura
-
-```text
-auth-lambda/
-├── README.md
-├── .gitignore
-├── .mvn/
-├── mvnw
-├── mvnw.cmd
-├── pom.xml
-└── src/
-```
-
-## Dependências externas
-
-- PostgreSQL acessível pelo lambda
-- chaves JWT de assinatura e verificação no ambiente produtivo
-
-## Variáveis de ambiente
-
-Banco:
-
-- `QUARKUS_DATASOURCE_USERNAME`
-- `QUARKUS_DATASOURCE_PASSWORD`
-- `QUARKUS_DATASOURCE_JDBC_URL` opcional quando o deploy monta o JDBC URL a partir do RDS
-
-JWT:
-
-- `MP_JWT_VERIFY_PUBLICKEY` ou `MP_JWT_VERIFY_PUBLICKEY_LOCATION`
-- `SMALLRYE_JWT_SIGN_KEY` ou `SMALLRYE_JWT_SIGN_KEY_LOCATION`
-
-No ambiente produtivo, o Quarkus lê diretamente as variáveis do ambiente da Lambda. Isso permite publicar as chaves JWT inline como secret do GitHub Environment, sem depender de arquivos dentro da função.
+O handler recebe eventos `APIGatewayV2HTTPEvent` e responde `APIGatewayV2HTTPResponse`, compatível com HTTP API Gateway payload format `2.0`.
 
 ## Desenvolvimento local
 
 Para `dev` e `test`, o projeto usa:
 
 - schema `drop-and-create`
-- `import.sql` reduzido ao contexto de usuários
-- chaves JWT de teste em `src/test/resources/jwt/`
-- mock event server do Quarkus Lambda em `%dev.quarkus.lambda.mock-event-server.dev-port=9080`
+- carga reduzida em `import.sql`/`import-h2.sql`
+- H2 nos testes
+- chaves JWT locais ou de teste
+- mock event server do Quarkus Lambda em `http://localhost:9080/_lambda_`
 
-Para rodar em `dev`, gere um par local não versionado:
+Gere um par local não versionado:
 
 ```bash
 ./scripts/generate-dev-jwt-keys.sh
 ```
 
-Depois suba a aplicação:
+Suba a aplicação:
 
 ```bash
 ./mvnw quarkus:dev
 ```
 
-Com o mock event server ativo em `http://localhost:9080/_lambda_`, você pode testar localmente com:
+Exemplo de invocação pelo mock event server:
 
 ```bash
 curl -X POST http://localhost:9080/_lambda_ \
   -H 'Content-Type: application/json' \
   -d '{
-    "cpf": "84191404067",
-    "password": "secret"
+    "version": "2.0",
+    "routeKey": "POST /auth",
+    "rawPath": "/auth",
+    "requestContext": {
+      "http": {
+        "method": "POST",
+        "path": "/auth"
+      }
+    },
+    "body": "{\"cpf\":\"84191404067\",\"password\":\"secret\"}",
+    "isBase64Encoded": false
   }'
 ```
 
-Esse comando envia um evento diretamente para o handler da Lambda e retorna o `AutenticarUsuarioResponse` com o JWT quando as credenciais forem válidas.
-
-## Build JVM
+## Testes
 
 ```bash
-cd auth-lambda
 ./mvnw test
-./mvnw package
+./mvnw verify -DskipITs=false
 ```
 
-## Build nativo para runtime customizado da AWS
+## Build nativo
 
-O projeto agora possui um profile Maven dedicado para gerar o pacote nativo do Lambda:
-
-```bash
-./mvnw clean package -Pnative-aws
-```
-
-Esse profile:
-
-- habilita `quarkus.native.enabled`
-- faz o native build em container para sempre gerar binário Linux
-- usa `quarkus.native.march=compatibility` para evitar acoplamento ao CPU da máquina de build
-
-Também existe um wrapper simples para CI ou uso local:
+O profile `native-aws` gera binário Linux em container para o runtime customizado da AWS Lambda:
 
 ```bash
 ./scripts/build-native-lambda.sh
 ```
 
-Ao final do build, os artefatos relevantes ficam em `target/`:
+Artefatos gerados:
 
-- `function.zip`: pacote pronto para deploy no runtime customizado da AWS Lambda
-- `oficina-auth-lambda-native.zip`: cópia com nome explícito para publicação em pipeline
-- `manage.sh`: script gerado pelo Quarkus para `create`, `update`, `delete` e `invoke`
-- `sam.native.yaml`: template SAM para teste local do binário nativo
+- `target/function.zip`: pacote usado no deploy
+- `target/oficina-auth-lambda-native.zip`: cópia com nome explícito para pipeline
+- `target/manage.sh`: script gerado pelo Quarkus
+- `target/sam.native.yaml`: template SAM para teste local
 
-## Empacotamento Lambda
+O build nativo exige Docker ou Podman disponível no ambiente.
 
-Para deploy nativo no runtime customizado da AWS Lambda, use o zip gerado em `target/function.zip` ou `target/oficina-auth-lambda-native.zip`.
+Nos GitHub Actions, o pacote nativo é salvo em S3 com chave baseada no commit (`github.sha`). Se o mesmo commit for republicado pelo workflow `Redeploy Lambda Lab`, o pipeline restaura `target/function.zip` e `target/oficina-auth-lambda-native.zip` do S3 e pula o build nativo.
 
-Exemplo com o script gerado pelo Quarkus:
+## Deploy
 
-```bash
-sh target/manage.sh native create
-sh target/manage.sh native update
-```
+O deploy automatizado fica em [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-## Deploy com GitHub Actions
+- `develop`: executa testes unitários e de integração
+- `main`: executa testes, build nativo e deploy na AWS
 
-O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) faz o deploy nativo da Lambda diretamente na AWS usando o GitHub Environment `lab`.
+Em `main`, o build nativo só é executado quando ainda não existir pacote nativo no S3 para o commit atual.
 
-A autenticação AWS segue o caminho mais simples para o laboratório atual:
-
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_SESSION_TOKEN` quando o laboratório entregar credenciais temporárias
-
-Esses valores devem ficar em `secrets` do Environment `lab`. Como o laboratório costuma recriar as credenciais a cada sessão, esses secrets precisam ser atualizados antes de um novo deploy.
-
-Variáveis esperadas no mesmo Environment:
-
-- `AWS_REGION`
-- `EKS_CLUSTER_NAME`
-- `DB_INSTANCE_IDENTIFIER`
-- `LAMBDA_FUNCTION_NAME`
-
-Variáveis opcionais:
-
-- `DB_NAME`
-- `DB_SSLMODE`
-- `DB_SECURITY_GROUP_IDS`
-- `LAMBDA_RUNTIME`
-- `LAMBDA_ARCHITECTURE`
-- `LAMBDA_MEMORY_SIZE`
-- `LAMBDA_TIMEOUT`
-- `LAMBDA_VPC_ID`
-- `LAMBDA_SUBNET_IDS`
-- `LAMBDA_SECURITY_GROUP_NAME`
-
-Secrets esperados:
-
-- `LAMBDA_ROLE_ARN`: obrigatório apenas na primeira criação da função
-- `QUARKUS_DATASOURCE_USERNAME`
-- `QUARKUS_DATASOURCE_PASSWORD`
-- `QUARKUS_DATASOURCE_JDBC_URL`: opcional, para sobrescrever a URL montada automaticamente
-- `MP_JWT_VERIFY_PUBLICKEY` ou `MP_JWT_VERIFY_PUBLICKEY_LOCATION`
-- `SMALLRYE_JWT_SIGN_KEY` ou `SMALLRYE_JWT_SIGN_KEY_LOCATION`
-
-O deploy faz estas etapas:
+O deploy:
 
 - baixa o pacote nativo da Lambda
-- descobre `vpc_id` e `subnet_ids` a partir do cluster EKS, salvo override
-- descobre endpoint, porta e security groups do RDS pela instância
-- cria ou reutiliza um security group próprio da Lambda
-- autoriza esse security group a acessar a porta do banco
-- cria ou atualiza a Lambda com `VpcConfig`, runtime nativo e environment variables
+- descobre VPC/subnets pelo EKS, salvo overrides
+- descobre endpoint, porta e security groups do RDS
+- cria ou reutiliza o security group dedicado da Lambda
+- autoriza o security group da Lambda no RDS
+- cria ou atualiza a função Lambda com `VpcConfig` e variáveis do Quarkus
+- cria ou atualiza a rota `POST /auth` no HTTP API Gateway existente
+- adiciona permissão para o API Gateway invocar a Lambda
 
-Esse desenho segue a topologia dos projetos `oficina-infra-k8s` e `oficina-infra-db`: cluster e banco compartilham a mesma VPC de laboratório, e o RDS permanece privado.
+Detalhes de variáveis, secrets e workflows auxiliares: [docs/github-actions.md](docs/github-actions.md).
 
-## Observações
+## Operações manuais
 
-- o projeto foi montado sem alterar o monólito atual
-- o contrato implementado neste repositório cobre apenas autenticação
-- as chaves de desenvolvimento em `src/main/resources/jwt/` não são versionadas; em produção use variáveis de ambiente apontando para chaves reais
-- o build nativo exige um runtime de container compatível com o Quarkus native build, como Docker ou Podman
+Redeploy completo da Lambda a partir da branch `main`:
+
+```text
+Actions -> Redeploy Lambda Lab -> Run workflow
+```
+
+Cleanup limitado aos recursos da Lambda:
+
+```text
+Actions -> Cleanup Lambda Lab -> Run workflow -> confirm_cleanup=CLEANUP
+```
+
+O cleanup preserva RDS, API Gateway, EKS, VPC e bucket de state. Ele remove a função Lambda, o log group, o security group dedicado da Lambda quando liberado, e as regras do RDS que apontam para esse security group.
+
+## Validação local
+
+```bash
+./mvnw test
+bash -n scripts/*.sh
+```

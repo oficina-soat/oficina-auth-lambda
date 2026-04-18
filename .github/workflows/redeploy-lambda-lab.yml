@@ -1,11 +1,7 @@
-name: CI/CD
+name: Redeploy Lambda Lab
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - develop
-      - main
 
 concurrency:
   group: lab-lambda
@@ -13,6 +9,7 @@ concurrency:
 
 jobs:
   build_and_unit_tests:
+    if: github.ref_name == 'main'
     name: build-and-unit-tests
     runs-on: ubuntu-latest
     steps:
@@ -33,6 +30,7 @@ jobs:
         run: ./mvnw -B clean package -DskipITs=true -DfailIfNoTests=false
 
   integration_tests:
+    if: github.ref_name == 'main'
     name: integration-tests
     runs-on: ubuntu-latest
     needs: build_and_unit_tests
@@ -54,10 +52,10 @@ jobs:
         run: ./mvnw -B verify -DskipITs=false -DfailIfNoTests=false
 
   build_native_lambda:
+    if: github.ref_name == 'main'
     name: build-native-lambda
     runs-on: ubuntu-latest
     needs: integration_tests
-    if: github.ref_name == 'main'
     permissions:
       contents: read
     environment:
@@ -123,10 +121,10 @@ jobs:
           if-no-files-found: error
 
   deploy_lambda:
+    if: github.ref_name == 'main'
     name: deploy-lambda
     runs-on: ubuntu-latest
     needs: build_native_lambda
-    if: github.ref_name == 'main'
     permissions:
       contents: read
     environment:
@@ -174,6 +172,7 @@ jobs:
           path: target
 
       - name: Validate deploy inputs
+        shell: bash
         run: |
           missing=()
           [[ -n "${AWS_ACCESS_KEY_ID}" ]] || missing+=("AWS_ACCESS_KEY_ID")
@@ -207,6 +206,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Deploy native Lambda
+        shell: bash
         run: |
           chmod +x ./scripts/deploy-native-lambda.sh
           ./scripts/deploy-native-lambda.sh
