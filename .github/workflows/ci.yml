@@ -184,7 +184,6 @@ jobs:
           missing=()
           [[ -n "${AWS_ACCESS_KEY_ID}" ]] || missing+=("AWS_ACCESS_KEY_ID")
           [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || missing+=("AWS_SECRET_ACCESS_KEY")
-          [[ -n "${EKS_CLUSTER_NAME}" ]] || missing+=("EKS_CLUSTER_NAME")
           [[ -n "${LAMBDA_FUNCTION_NAME}" ]] || missing+=("LAMBDA_FUNCTION_NAME")
           [[ -n "${QUARKUS_DATASOURCE_USERNAME}" ]] || missing+=("QUARKUS_DATASOURCE_USERNAME")
           [[ -n "${QUARKUS_DATASOURCE_PASSWORD}" ]] || missing+=("QUARKUS_DATASOURCE_PASSWORD")

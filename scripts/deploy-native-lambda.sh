@@ -51,7 +51,6 @@ Uso:
 
 Variaveis obrigatorias:
   AWS_REGION
-  EKS_CLUSTER_NAME
   LAMBDA_FUNCTION_NAME
   QUARKUS_DATASOURCE_USERNAME
   QUARKUS_DATASOURCE_PASSWORD
@@ -62,6 +61,7 @@ Variaveis obrigatorias:
 
 Variaveis opcionais:
   ARTIFACT_PATH                Zip da Lambda. Default: target/function.zip
+  EKS_CLUSTER_NAME             Fallback opcional para descobrir VPC/subnets
   DB_INSTANCE_IDENTIFIER       Identificador do RDS. Default: oficina-postgres-lab
   DB_NAME ou QUARKUS_DATASOURCE_DB_NAME
   DB_SSLMODE                   Default: require
@@ -325,7 +325,6 @@ require_cmd aws
 require_cmd jq
 require_cmd md5sum
 require_non_empty "${AWS_REGION}" "AWS_REGION"
-require_non_empty "${EKS_CLUSTER_NAME}" "EKS_CLUSTER_NAME"
 require_non_empty "${LAMBDA_FUNCTION_NAME}" "LAMBDA_FUNCTION_NAME"
 require_non_empty "${QUARKUS_DATASOURCE_USERNAME}" "QUARKUS_DATASOURCE_USERNAME"
 require_non_empty "${QUARKUS_DATASOURCE_PASSWORD}" "QUARKUS_DATASOURCE_PASSWORD"
@@ -343,24 +342,8 @@ fi
 LAMBDA_SUBNET_IDS="$(normalize_list "${LAMBDA_SUBNET_IDS}")"
 DB_SECURITY_GROUP_IDS="$(normalize_list "${DB_SECURITY_GROUP_IDS}")"
 
-if [[ -z "${LAMBDA_VPC_ID}" || -z "${LAMBDA_SUBNET_IDS}" ]]; then
-  log "Descobrindo VPC e subnets a partir do cluster EKS ${EKS_CLUSTER_NAME}"
-  eks_json="$(aws_json eks describe-cluster --name "${EKS_CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.{vpcId:vpcId,subnetIds:subnetIds}')"
-
-  if [[ -z "${LAMBDA_VPC_ID}" ]]; then
-    LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${eks_json}")"
-  fi
-
-  if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
-    LAMBDA_SUBNET_IDS="$(jq -r '.subnetIds | join(",")' <<<"${eks_json}")"
-  fi
-fi
-
-require_non_empty "${LAMBDA_VPC_ID}" "LAMBDA_VPC_ID"
-require_non_empty "${LAMBDA_SUBNET_IDS}" "LAMBDA_SUBNET_IDS"
-
-log "Descobrindo endpoint e security groups do RDS ${DB_INSTANCE_IDENTIFIER}"
-db_json="$(aws_json rds describe-db-instances --db-instance-identifier "${DB_INSTANCE_IDENTIFIER}" --query 'DBInstances[0].{endpoint:Endpoint.Address,port:Endpoint.Port,dbName:DBName,securityGroupIds:VpcSecurityGroups[].VpcSecurityGroupId}')"
+log "Descobrindo endpoint, VPC, subnets e security groups do RDS ${DB_INSTANCE_IDENTIFIER}"
+db_json="$(aws_json rds describe-db-instances --db-instance-identifier "${DB_INSTANCE_IDENTIFIER}" --query 'DBInstances[0].{endpoint:Endpoint.Address,port:Endpoint.Port,dbName:DBName,securityGroupIds:VpcSecurityGroups[].VpcSecurityGroupId,vpcId:DBSubnetGroup.VpcId,subnetIds:DBSubnetGroup.Subnets[].SubnetIdentifier}')"
 
 db_host="$(jq -r '.endpoint // empty' <<<"${db_json}")"
 db_port="$(jq -r '.port // empty' <<<"${db_json}")"
@@ -371,13 +354,36 @@ if [[ -n "${DB_NAME_OVERRIDE}" ]]; then
 fi
 
 if [[ -z "${DB_SECURITY_GROUP_IDS}" ]]; then
-  DB_SECURITY_GROUP_IDS="$(jq -r '.securityGroupIds | join(",")' <<<"${db_json}")"
+  DB_SECURITY_GROUP_IDS="$(jq -r '(.securityGroupIds // []) | join(",")' <<<"${db_json}")"
+fi
+
+if [[ -z "${LAMBDA_VPC_ID}" ]]; then
+  LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${db_json}")"
+fi
+
+if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
+  LAMBDA_SUBNET_IDS="$(jq -r '(.subnetIds // []) | join(",")' <<<"${db_json}")"
+fi
+
+if [[ -z "${LAMBDA_VPC_ID}" || -z "${LAMBDA_SUBNET_IDS}" ]] && [[ -n "${EKS_CLUSTER_NAME}" ]]; then
+  log "VPC/subnets nao encontrados no RDS; tentando fallback pelo cluster EKS ${EKS_CLUSTER_NAME}"
+  eks_json="$(aws_json eks describe-cluster --name "${EKS_CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.{vpcId:vpcId,subnetIds:subnetIds}')"
+
+  if [[ -z "${LAMBDA_VPC_ID}" ]]; then
+    LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${eks_json}")"
+  fi
+
+  if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
+    LAMBDA_SUBNET_IDS="$(jq -r '(.subnetIds // []) | join(",")' <<<"${eks_json}")"
+  fi
 fi
 
 require_non_empty "${db_host}" "db_host"
 require_non_empty "${db_port}" "db_port"
 require_non_empty "${db_name}" "DB_NAME"
 require_non_empty "${DB_SECURITY_GROUP_IDS}" "DB_SECURITY_GROUP_IDS"
+require_non_empty "${LAMBDA_VPC_ID}" "LAMBDA_VPC_ID"
+require_non_empty "${LAMBDA_SUBNET_IDS}" "LAMBDA_SUBNET_IDS"
 
 if [[ -z "${QUARKUS_DATASOURCE_JDBC_URL}" ]]; then
   QUARKUS_DATASOURCE_JDBC_URL="jdbc:postgresql://${db_host}:${db_port}/${db_name}?sslmode=${DB_SSLMODE}"
