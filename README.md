@@ -38,6 +38,7 @@ Esses recursos ficam nos repositórios irmãos:
 - ambiente GitHub Actions: `lab`
 - nome padrão da infra compartilhada: `eks-lab`
 - banco padrão: `oficina-postgres-lab`
+- VPC/subnets da Lambda: descobertas pelo DB subnet group do RDS por padrão
 - API Gateway padrão: `<EKS_CLUSTER_NAME>-http-api`
 - função padrão: `oficina-auth-lambda-lab`
 - rota padrão no gateway: `POST /auth`

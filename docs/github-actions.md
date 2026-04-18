@@ -69,7 +69,7 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 ## Variables principais
 
 - `AWS_REGION`: default `us-east-1`
-- `EKS_CLUSTER_NAME`: default `eks-lab`
+- `EKS_CLUSTER_NAME`: default `eks-lab`; usado como fallback para descobrir VPC/subnets e para montar o nome default do API Gateway
 - `DB_INSTANCE_IDENTIFIER`: default `oficina-postgres-lab`
 - `DB_IDENTIFIER`: fallback aceito para manter compatibilidade com `oficina-infra-db`
 - `DB_NAME`: opcional; sobrescreve o database name retornado pelo RDS
@@ -80,8 +80,8 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 - `LAMBDA_ARCHITECTURE`: default `x86_64`
 - `LAMBDA_MEMORY_SIZE`: default `256`
 - `LAMBDA_TIMEOUT`: default `15`
-- `LAMBDA_VPC_ID`: override opcional
-- `LAMBDA_SUBNET_IDS`: lista CSV ou JSON, override opcional
+- `LAMBDA_VPC_ID`: override opcional; quando ausente, o deploy tenta usar a VPC do RDS
+- `LAMBDA_SUBNET_IDS`: lista CSV ou JSON, override opcional; quando ausente, o deploy tenta usar as subnets do DB subnet group do RDS
 - `LAMBDA_SECURITY_GROUP_NAME`: default `<LAMBDA_FUNCTION_NAME>-sg`
 - `LAMBDA_ARTIFACT_BUCKET`: bucket S3 opcional para armazenar o pacote nativo; fallback para `TF_STATE_BUCKET`
 - `LAMBDA_ARTIFACT_PREFIX`: prefixo S3 dos pacotes nativos. Default `oficina/lab/lambda/oficina-auth-lambda`
@@ -135,7 +135,7 @@ Ele preserva:
 
 ## Integração com os repos de infra
 
-O RDS é descoberto pelo `DB_INSTANCE_IDENTIFIER` criado em `../oficina-infra-db`. O default deste repo é `oficina-postgres-lab`, mesmo default do repo de banco.
+O RDS é descoberto pelo `DB_INSTANCE_IDENTIFIER` criado em `../oficina-infra-db`. O default deste repo é `oficina-postgres-lab`, mesmo default do repo de banco. A VPC e as subnets da Lambda também são descobertas a partir do DB subnet group do RDS, salvo quando `LAMBDA_VPC_ID` e `LAMBDA_SUBNET_IDS` forem informados explicitamente.
 
 O API Gateway é descoberto por `API_GATEWAY_ID` ou por `API_GATEWAY_NAME`. O default por nome segue `../oficina-infra-k8s`: `<EKS_CLUSTER_NAME>-http-api`.
 
