@@ -22,7 +22,7 @@ jobs:
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Resolve Lambda release
         id: version
@@ -65,7 +65,7 @@ jobs:
       LAMBDA_RELEASE_TAG: ${{ needs.resolve_lambda_release.outputs.release_tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Lambda package from GitHub release
         shell: bash
@@ -82,7 +82,7 @@ jobs:
 
       - name: Configure AWS credentials
         if: env.LAMBDA_ARTIFACT_BUCKET != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -100,7 +100,7 @@ jobs:
         run: echo "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; pacote ficou somente no GitHub Release."
 
       - name: Upload Lambda package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lambda-native-package
           path: |
@@ -154,10 +154,10 @@ jobs:
       SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Lambda package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: lambda-native-package
           path: target
@@ -188,7 +188,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
