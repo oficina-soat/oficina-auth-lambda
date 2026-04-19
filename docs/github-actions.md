@@ -92,7 +92,7 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 - `LAMBDA_FUNCTION_NAME`: default `oficina-auth-lambda-lab`
 - `LAMBDA_RUNTIME`: default `provided.al2023`
 - `LAMBDA_ARCHITECTURE`: default `x86_64`
-- `LAMBDA_MEMORY_SIZE`: default `256`
+- `LAMBDA_MEMORY_SIZE`: default `1024`
 - `LAMBDA_TIMEOUT`: default `15`
 - `LAMBDA_VPC_ID`: override opcional; quando ausente, o deploy tenta usar a VPC do RDS
 - `LAMBDA_SUBNET_IDS`: lista CSV ou JSON, override opcional; quando ausente, o deploy tenta usar as subnets do DB subnet group do RDS

@@ -130,7 +130,7 @@ jobs:
       LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME || 'oficina-auth-lambda-lab' }}
       LAMBDA_RUNTIME: ${{ vars.LAMBDA_RUNTIME || 'provided.al2023' }}
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
-      LAMBDA_MEMORY_SIZE: ${{ vars.LAMBDA_MEMORY_SIZE || '256' }}
+      LAMBDA_MEMORY_SIZE: ${{ vars.LAMBDA_MEMORY_SIZE || '1024' }}
       LAMBDA_TIMEOUT: ${{ vars.LAMBDA_TIMEOUT || '15' }}
       LAMBDA_VPC_ID: ${{ vars.LAMBDA_VPC_ID }}
       LAMBDA_SUBNET_IDS: ${{ vars.LAMBDA_SUBNET_IDS }}
