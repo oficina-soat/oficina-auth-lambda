@@ -6,11 +6,10 @@
 
     <groupId>br.com.oficina</groupId>
     <artifactId>oficina-auth-lambda</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 
     <properties>
         <compiler-plugin.version>3.14.1</compiler-plugin.version>
-        <aws-lambda-java-events.version>3.16.1</aws-lambda-java-events.version>
         <failsafe-plugin.version>3.5.4</failsafe-plugin.version>
         <jacoco-plugin.version>0.8.13</jacoco-plugin.version>
         <maven.compiler.release>21</maven.compiler.release>
@@ -42,12 +41,11 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-amazon-lambda</artifactId>
+            <artifactId>quarkus-amazon-lambda-http</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-lambda-java-events</artifactId>
-            <version>${aws-lambda-java-events.version}</version>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -87,6 +85,11 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

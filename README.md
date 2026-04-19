@@ -4,16 +4,18 @@ Lambda standalone de autenticação da Oficina, publicada em runtime nativo do Q
 
 O projeto isola o fluxo de autenticação que antes ficava acoplado ao monólito:
 
-- handler AWS Lambda para autenticar usuário por CPF e senha
+- endpoint HTTP para autenticar usuário por CPF e senha
 - integração com PostgreSQL/RDS privado do ambiente `oficina-infra-db`
 - publicação por HTTP API Gateway do ambiente `oficina-infra-k8s`
 - emissão de JWT com SmallRye JWT
 - testes unitários e de integração com H2
-- pipeline que em `develop` executa apenas testes e em `main` executa testes, build nativo e deploy
+- pipeline que só executa build/release/deploy quando a versão da Lambda muda
 
 ## O que este projeto gerencia
 
 - pacote nativo da Lambda (`target/function.zip`)
+- GitHub Release da versão fechada da Lambda
+- cópia operacional do pacote no S3, quando configurado
 - função AWS Lambda
 - security group dedicado da Lambda
 - liberação do security group da Lambda no security group do RDS
@@ -46,7 +48,7 @@ Esses recursos ficam nos repositórios irmãos:
 
 ## Estrutura
 
-- `src/main/java`: domínio, persistência e handler Lambda
+- `src/main/java`: domínio, persistência e endpoint HTTP
 - `src/test/java`: testes unitários e de integração
 - `src/main/resources/application.properties`: configuração Quarkus por perfil
 - `scripts/build-native-lambda.sh`: build nativo do pacote Lambda
@@ -69,7 +71,7 @@ Entrada:
 ```json
 {
   "cpf": "84191404067",
-  "password": "secret"
+  "password": "12345"
 }
 ```
 
@@ -83,7 +85,7 @@ Resposta de sucesso:
 }
 ```
 
-O handler recebe eventos `APIGatewayV2HTTPEvent` e responde `APIGatewayV2HTTPResponse`, compatível com HTTP API Gateway payload format `2.0`.
+O endpoint é implementado com Quarkus REST e publicado na Lambda pela extensão `quarkus-amazon-lambda-http`, compatível com HTTP API Gateway payload format `2.0`.
 
 ## Desenvolvimento local
 
@@ -93,7 +95,7 @@ Para `dev` e `test`, o projeto usa:
 - carga reduzida em `import.sql`/`import-h2.sql`
 - H2 nos testes
 - chaves JWT locais ou de teste
-- mock event server do Quarkus Lambda em `http://localhost:9080/_lambda_`
+- mock HTTP server do Quarkus Lambda em `http://localhost:9080`
 
 Gere um par local não versionado:
 
@@ -107,23 +109,14 @@ Suba a aplicação:
 ./mvnw quarkus:dev
 ```
 
-Exemplo de invocação pelo mock event server:
+Exemplo de invocação local:
 
 ```bash
-curl -X POST http://localhost:9080/_lambda_ \
+curl -X POST http://localhost:9080/auth \
   -H 'Content-Type: application/json' \
   -d '{
-    "version": "2.0",
-    "routeKey": "POST /auth",
-    "rawPath": "/auth",
-    "requestContext": {
-      "http": {
-        "method": "POST",
-        "path": "/auth"
-      }
-    },
-    "body": "{\"cpf\":\"84191404067\",\"password\":\"secret\"}",
-    "isBase64Encoded": false
+    "cpf": "84191404067",
+    "password": "12345"
   }'
 ```
 
@@ -151,16 +144,18 @@ Artefatos gerados:
 
 O build nativo exige Docker ou Podman disponível no ambiente.
 
-Nos GitHub Actions, o pacote nativo é salvo em S3 com chave baseada no commit (`github.sha`). Se o mesmo commit for republicado pelo workflow `Redeploy Lambda Lab`, o pipeline restaura `target/function.zip` e `target/oficina-auth-lambda-native.zip` do S3 e pula o build nativo.
+Nos GitHub Actions, o pacote nativo é fechado primeiro em um GitHub Release `v<project.version>`. O asset publicado segue o padrão `oficina-auth-lambda-<project.version>-<LAMBDA_ARCHITECTURE>.zip`.
+
+Depois da release, o workflow baixa o asset da própria release e só então envia a cópia operacional para o S3, usando chave baseada em `project.version`.
 
 ## Deploy
 
 O deploy automatizado fica em [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-- `develop`: executa testes unitários e de integração
-- `main`: executa testes, build nativo e deploy na AWS
+- `develop`: executa testes unitários e de integração somente quando `project.version` muda
+- `main`: executa testes, build nativo, GitHub Release, S3 e deploy somente quando `project.version` muda
 
-Em `main`, o build nativo só é executado quando ainda não existir pacote nativo no S3 para o commit atual.
+Commits que não alteram `project.version` não geram build, release nem deploy. Em `main`, versões fechadas não podem terminar com `-SNAPSHOT`, e uma versão já publicada não é sobrescrita.
 
 O deploy:
 
@@ -177,7 +172,7 @@ Detalhes de variáveis, secrets e workflows auxiliares: [docs/github-actions.md]
 
 ## Operações manuais
 
-Redeploy completo da Lambda a partir da branch `main`:
+Redeploy da Lambda a partir da release já fechada da versão atual em `main`:
 
 ```text
 Actions -> Redeploy Lambda Lab -> Run workflow
