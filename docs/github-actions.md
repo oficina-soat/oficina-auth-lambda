@@ -10,29 +10,32 @@ Workflows disponíveis:
 
 ## Gatilho
 
-- `push` em `develop`: testes unitários e de integração somente quando `project.version` em `pom.xml` mudar
-- `push` em `main`: testes, build nativo, GitHub Release, armazenamento S3 e deploy somente quando `project.version` em `pom.xml` mudar
-- `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; executa somente quando a release da versão atual ainda não existir
+- `push` em `develop`: verifica se a release da versão atual ainda não existe; quando houver deploy pendente, executa testes unitários e de integração e cria ou atualiza o PR `develop -> main`
+- `push` em `main`: após o merge do PR, executa build nativo, GitHub Release, armazenamento S3 e deploy quando a release da versão atual ainda não existir
+- `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; executa somente quando a release da versão atual ainda não existir. Em `main`, o disparo manual também executa os testes antes do build nativo
 - `workflow_dispatch` em `redeploy-lambda-lab.yml`: redeploy manual da release já fechada, somente quando a branch selecionada for `main`
 - `workflow_dispatch` em `cleanup-lambda-lab.yml`: cleanup manual com confirmação `CLEANUP`
 
 Os workflows que alteram a Lambda compartilham o grupo de `concurrency` `lab-lambda`, evitando cleanup e deploy simultâneos.
 
-Commits que alteram apenas arquivos acessórios, sem mudança de `project.version`, não executam build, release nem deploy.
+Quando a release da versão atual já existe, o `ci.yml` não executa testes, build, release nem deploy. Isso mantém commits posteriores sem incremento de `project.version` fora do caminho de deploy.
+
+Para que a criação automática do PR funcione, o repositório precisa permitir que o `GITHUB_TOKEN` crie pull requests (`Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests`).
 
 ## Release e armazenamento do build nativo
 
-O GitHub Release é a origem oficial da versão fechada da Lambda. Em `main`, quando `project.version` muda, o workflow:
+O GitHub Release é a origem oficial da versão fechada da Lambda. Em `main`, quando a release da versão atual ainda não existe, o workflow:
 
-1. executa testes unitários e de integração
-2. gera o pacote nativo
-3. cria a release `v<project.version>`
-4. anexa o asset `oficina-auth-lambda-<project.version>-<LAMBDA_ARCHITECTURE>.zip`
-5. baixa o asset da própria release
-6. armazena esse mesmo pacote no S3, quando o bucket estiver configurado
-7. faz o deploy da Lambda
+1. gera o pacote nativo
+2. cria a release `v<project.version>`
+3. anexa o asset `oficina-auth-lambda-<project.version>-<LAMBDA_ARCHITECTURE>.zip`
+4. baixa o asset da própria release
+5. armazena esse mesmo pacote no S3, quando o bucket estiver configurado
+6. faz o deploy da Lambda
 
-Versões em `main` não podem terminar com `-SNAPSHOT`. Se a release da versão atual já existir, o workflow falha e exige incremento de versão antes de gerar outro pacote.
+No fluxo automático, os testes unitários e de integração rodam antes, no `push` em `develop`, e o PR só é criado ou atualizado se esses testes passarem. Quando o PR é aceito, o `push` em `main` começa no build nativo. No disparo manual de `ci.yml` em `main`, os testes ainda rodam antes do build nativo.
+
+O PR automático de deploy não é aberto para versões `-SNAPSHOT`. Versões em `main` também não podem terminar com `-SNAPSHOT`. Se a versão mudar para uma release que já existe, o workflow falha e exige incremento de versão antes de gerar outro pacote.
 
 Os workflows `CI/CD` e `Redeploy Lambda Lab` podem usar S3 para armazenar cópias operacionais:
 

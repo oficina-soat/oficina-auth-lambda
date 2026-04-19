@@ -20,6 +20,7 @@ jobs:
     outputs:
       base_version: ${{ steps.version.outputs.base_version }}
       current_version: ${{ steps.version.outputs.current_version }}
+      deploy_needed: ${{ steps.version.outputs.deploy_needed }}
       release_asset: ${{ steps.version.outputs.release_asset }}
       release_exists: ${{ steps.version.outputs.release_exists }}
       release_tag: ${{ steps.version.outputs.release_tag }}
@@ -28,7 +29,7 @@ jobs:
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -72,11 +73,12 @@ jobs:
             release_exists="true"
           fi
 
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${release_exists}" == "false" ]]; then
-            version_changed="true"
+          deploy_needed="false"
+          if [[ "${release_exists}" == "false" ]]; then
+            deploy_needed="true"
           fi
 
-          if [[ "${{ github.ref_name }}" == "main" && "${version_changed}" == "true" && "${current_version}" == *-SNAPSHOT ]]; then
+          if [[ "${{ github.ref_name }}" == "main" && "${deploy_needed}" == "true" && "${current_version}" == *-SNAPSHOT ]]; then
             echo "A versao fechada da Lambda em main nao pode ser SNAPSHOT: ${current_version}" >&2
             exit 1
           fi
@@ -89,6 +91,7 @@ jobs:
           {
             echo "base_version=${base_version}"
             echo "current_version=${current_version}"
+            echo "deploy_needed=${deploy_needed}"
             echo "release_asset=${release_asset}"
             echo "release_exists=${release_exists}"
             echo "release_tag=${release_tag}"
@@ -98,6 +101,7 @@ jobs:
           echo "Versao base: ${base_version:-<indisponivel>}"
           echo "Versao atual: ${current_version}"
           echo "Mudanca de versao: ${version_changed}"
+          echo "Deploy necessario: ${deploy_needed}"
           echo "Release alvo: ${release_tag}"
           echo "Release existente: ${release_exists}"
 
@@ -105,10 +109,12 @@ jobs:
     name: build-and-unit-tests
     runs-on: ubuntu-latest
     needs: detect_lambda_version
-    if: needs.detect_lambda_version.outputs.version_changed == 'true'
+    if: >
+      needs.detect_lambda_version.outputs.deploy_needed == 'true' &&
+      (github.ref_name == 'develop' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -129,10 +135,12 @@ jobs:
     needs:
       - detect_lambda_version
       - build_and_unit_tests
-    if: needs.detect_lambda_version.outputs.version_changed == 'true'
+    if: >
+      needs.detect_lambda_version.outputs.deploy_needed == 'true' &&
+      (github.ref_name == 'develop' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -147,13 +155,75 @@ jobs:
       - name: Run integration tests
         run: ./mvnw -B verify -DskipITs=false -DfailIfNoTests=false
 
+  create_deploy_pull_request:
+    name: create-deploy-pull-request
+    runs-on: ubuntu-latest
+    needs:
+      - detect_lambda_version
+      - integration_tests
+    if: >
+      github.event_name == 'push' &&
+      github.ref_name == 'develop' &&
+      needs.detect_lambda_version.outputs.deploy_needed == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CURRENT_VERSION: ${{ needs.detect_lambda_version.outputs.current_version }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.detect_lambda_version.outputs.release_tag }}
+    steps:
+      - name: Create or update deploy pull request
+        shell: bash
+        run: |
+          if [[ "${CURRENT_VERSION}" == *-SNAPSHOT ]]; then
+            echo "Nao vou abrir PR de deploy para versao SNAPSHOT: ${CURRENT_VERSION}" >&2
+            exit 1
+          fi
+
+          title="Deploy oficina-auth-lambda ${RELEASE_TAG}"
+          body="$(printf '%s\n\n%s\n%s\n%s\n%s\n\n%s\n' \
+            "Deploy automatico preparado pelo CI apos testes unitarios e integrados." \
+            "- Versao: ${CURRENT_VERSION}" \
+            "- Release alvo: ${RELEASE_TAG}" \
+            "- Branch origem: ${GITHUB_REF_NAME}" \
+            "- Commit validado: ${GITHUB_SHA}" \
+            "Ao aceitar este PR, o push em main executa build nativo, release e deploy.")"
+
+          pr_number="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base main \
+            --head "${GITHUB_REF_NAME}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // ""')"
+
+          if [[ -n "${pr_number}" ]]; then
+            gh pr edit "${pr_number}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" \
+              --body "${body}"
+            echo "PR de deploy atualizado: #${pr_number}"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base main \
+              --head "${GITHUB_REF_NAME}" \
+              --title "${title}" \
+              --body "${body}"
+          fi
+
   build_native_lambda:
     name: build-native-lambda
     runs-on: ubuntu-latest
     needs:
       - detect_lambda_version
       - integration_tests
-    if: github.ref_name == 'main' && needs.detect_lambda_version.outputs.version_changed == 'true'
+    if: >
+      always() &&
+      github.ref_name == 'main' &&
+      needs.detect_lambda_version.outputs.deploy_needed == 'true' &&
+      (github.event_name == 'push' || needs.integration_tests.result == 'success')
     permissions:
       contents: write
     environment:
@@ -170,7 +240,7 @@ jobs:
       LAMBDA_RELEASE_VERSION: ${{ needs.detect_lambda_version.outputs.current_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate release version
         shell: bash
@@ -238,7 +308,7 @@ jobs:
 
       - name: Configure AWS credentials
         if: env.LAMBDA_ARTIFACT_BUCKET != ''
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -254,7 +324,7 @@ jobs:
         run: echo "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; pacote ficou somente no GitHub Release."
 
       - name: Upload Lambda package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: lambda-native-package
           path: |
@@ -270,7 +340,7 @@ jobs:
     needs:
       - detect_lambda_version
       - build_native_lambda
-    if: github.ref_name == 'main' && needs.detect_lambda_version.outputs.version_changed == 'true'
+    if: github.ref_name == 'main' && needs.detect_lambda_version.outputs.deploy_needed == 'true'
     permissions:
       contents: read
     environment:
@@ -309,10 +379,10 @@ jobs:
       SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Lambda package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: lambda-native-package
           path: target
@@ -342,7 +412,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
