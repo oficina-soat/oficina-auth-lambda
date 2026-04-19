@@ -10,39 +10,53 @@ Workflows disponíveis:
 
 ## Gatilho
 
-- `push` em `develop`: testes unitários e de integração
-- `push` em `main`: testes, build nativo e deploy
-- `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; em `develop` não faz deploy
-- `workflow_dispatch` em `redeploy-lambda-lab.yml`: redeploy manual, somente quando a branch selecionada for `main`
+- `push` em `develop`: testes unitários e de integração somente quando `project.version` em `pom.xml` mudar
+- `push` em `main`: testes, build nativo, GitHub Release, armazenamento S3 e deploy somente quando `project.version` em `pom.xml` mudar
+- `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; executa somente quando a release da versão atual ainda não existir
+- `workflow_dispatch` em `redeploy-lambda-lab.yml`: redeploy manual da release já fechada, somente quando a branch selecionada for `main`
 - `workflow_dispatch` em `cleanup-lambda-lab.yml`: cleanup manual com confirmação `CLEANUP`
 
 Os workflows que alteram a Lambda compartilham o grupo de `concurrency` `lab-lambda`, evitando cleanup e deploy simultâneos.
 
-## Armazenamento do build nativo
+Commits que alteram apenas arquivos acessórios, sem mudança de `project.version`, não executam build, release nem deploy.
 
-Os workflows `CI/CD` e `Redeploy Lambda Lab` podem usar S3 para armazenar:
+## Release e armazenamento do build nativo
+
+O GitHub Release é a origem oficial da versão fechada da Lambda. Em `main`, quando `project.version` muda, o workflow:
+
+1. executa testes unitários e de integração
+2. gera o pacote nativo
+3. cria a release `v<project.version>`
+4. anexa o asset `oficina-auth-lambda-<project.version>-<LAMBDA_ARCHITECTURE>.zip`
+5. baixa o asset da própria release
+6. armazena esse mesmo pacote no S3, quando o bucket estiver configurado
+7. faz o deploy da Lambda
+
+Versões em `main` não podem terminar com `-SNAPSHOT`. Se a release da versão atual já existir, o workflow falha e exige incremento de versão antes de gerar outro pacote.
+
+Os workflows `CI/CD` e `Redeploy Lambda Lab` podem usar S3 para armazenar cópias operacionais:
 
 - `target/function.zip`
 - `target/oficina-auth-lambda-native.zip`
 
-O bucket é definido por `LAMBDA_ARTIFACT_BUCKET`. Se essa variable não for informada, o workflow tenta usar `TF_STATE_BUCKET`. Quando nenhum dos dois valores existe, o workflow pula o cache S3 e executa o build nativo normalmente.
+O bucket é definido por `LAMBDA_ARTIFACT_BUCKET`. Se essa variable não for informada, o workflow tenta usar `TF_STATE_BUCKET`. Quando nenhum dos dois valores existe, o pacote fica somente no GitHub Release e no artifact da execução.
 
 A chave dos objetos é:
 
 ```text
-<LAMBDA_ARTIFACT_PREFIX>/<LAMBDA_ARCHITECTURE>/<github.sha>/function.zip
-<LAMBDA_ARTIFACT_PREFIX>/<LAMBDA_ARCHITECTURE>/<github.sha>/oficina-auth-lambda-native.zip
+<LAMBDA_ARTIFACT_PREFIX>/<LAMBDA_ARCHITECTURE>/<project.version>/function.zip
+<LAMBDA_ARTIFACT_PREFIX>/<LAMBDA_ARCHITECTURE>/<project.version>/oficina-auth-lambda-native.zip
 ```
 
 O prefixo default é `oficina/lab/lambda/oficina-auth-lambda`.
 
 Isso significa que:
 
-- o primeiro deploy de um commit novo executa o build nativo e, quando o bucket estiver configurado, salva o pacote no S3
-- um redeploy manual do mesmo commit restaura o pacote do S3 e pula o build nativo, quando o bucket estiver configurado
-- qualquer commit novo gera uma chave nova e força um novo build nativo
+- o primeiro deploy de uma versão nova executa o build nativo, cria a release e, quando o bucket estiver configurado, salva no S3 o pacote baixado da release
+- um redeploy manual baixa o pacote da release existente e pode repor a cópia no S3
+- um commit novo sem mudança de versão não gera novo build nativo, release ou deploy
 
-O deploy continua usando o artifact `lambda-native-package` gerado ou restaurado no próprio workflow. O S3 serve como armazenamento durável entre execuções, mas é opcional.
+O deploy continua usando o artifact `lambda-native-package` da própria execução. O artifact é sempre derivado do GitHub Release antes de ser enviado ao S3 ou usado no deploy.
 
 ## Autenticação AWS
 
@@ -99,17 +113,16 @@ Quando `ATTACH_API_GATEWAY=true`, o deploy cria ou atualiza somente a rota infor
 
 ## Redeploy manual
 
-Use `Redeploy Lambda Lab` quando precisar republicar a Lambda sem novo merge em `main`.
+Use `Redeploy Lambda Lab` quando precisar republicar a Lambda a partir de uma versão já fechada, sem gerar novo build.
 
 O workflow executa:
 
-- testes unitários
-- testes de integração
-- build nativo, somente quando o pacote do commit atual não existir no S3
+- download do asset `oficina-auth-lambda-<project.version>-<LAMBDA_ARCHITECTURE>.zip` da release `v<project.version>`
+- armazenamento do pacote no S3, quando o bucket estiver configurado
 - deploy da Lambda
 - atualização da rota do API Gateway, quando habilitada
 
-Selecione a branch `main` ao executar o workflow. Em outras branches, os jobs ficam bloqueados por guarda explícita.
+Selecione a branch `main` ao executar o workflow. Em outras branches, os jobs ficam bloqueados por guarda explícita. Se a release da versão atual não existir, o workflow falha.
 
 ## Cleanup manual
 

@@ -12,9 +12,100 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  detect_lambda_version:
+    name: detect-lambda-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      base_version: ${{ steps.version.outputs.base_version }}
+      current_version: ${{ steps.version.outputs.current_version }}
+      release_asset: ${{ steps.version.outputs.release_asset }}
+      release_exists: ${{ steps.version.outputs.release_exists }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      version_changed: ${{ steps.version.outputs.version_changed }}
+    env:
+      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Lambda version change
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          extract_version() {
+            sed -n '0,/<version>[[:space:]]*/{
+              s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
+            }' "$1" | head -n 1
+          }
+
+          current_version="$(extract_version pom.xml)"
+          if [[ -z "${current_version}" ]]; then
+            echo "Nao foi possivel identificar project.version em pom.xml" >&2
+            exit 1
+          fi
+
+          base_version=""
+          version_changed="false"
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            if git show "${{ github.event.before }}:pom.xml" > /tmp/base-pom.xml 2>/dev/null; then
+              base_version="$(extract_version /tmp/base-pom.xml)"
+              if [[ "${current_version}" != "${base_version}" ]]; then
+                version_changed="true"
+              fi
+            else
+              version_changed="true"
+            fi
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            version_changed="true"
+          fi
+
+          release_tag="v${current_version}"
+          release_asset="oficina-auth-lambda-${current_version}-${LAMBDA_ARCHITECTURE}.zip"
+          release_exists="false"
+          if gh release view "${release_tag}" >/dev/null 2>&1; then
+            release_exists="true"
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${release_exists}" == "false" ]]; then
+            version_changed="true"
+          fi
+
+          if [[ "${{ github.ref_name }}" == "main" && "${version_changed}" == "true" && "${current_version}" == *-SNAPSHOT ]]; then
+            echo "A versao fechada da Lambda em main nao pode ser SNAPSHOT: ${current_version}" >&2
+            exit 1
+          fi
+
+          if [[ "${{ github.ref_name }}" == "main" && "${version_changed}" == "true" && "${release_exists}" == "true" ]]; then
+            echo "A release ${release_tag} ja existe. Incremente a versao da Lambda antes de gerar novo pacote." >&2
+            exit 1
+          fi
+
+          {
+            echo "base_version=${base_version}"
+            echo "current_version=${current_version}"
+            echo "release_asset=${release_asset}"
+            echo "release_exists=${release_exists}"
+            echo "release_tag=${release_tag}"
+            echo "version_changed=${version_changed}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Versao base: ${base_version:-<indisponivel>}"
+          echo "Versao atual: ${current_version}"
+          echo "Mudanca de versao: ${version_changed}"
+          echo "Release alvo: ${release_tag}"
+          echo "Release existente: ${release_exists}"
+
   build_and_unit_tests:
     name: build-and-unit-tests
     runs-on: ubuntu-latest
+    needs: detect_lambda_version
+    if: needs.detect_lambda_version.outputs.version_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,7 +126,10 @@ jobs:
   integration_tests:
     name: integration-tests
     runs-on: ubuntu-latest
-    needs: build_and_unit_tests
+    needs:
+      - detect_lambda_version
+      - build_and_unit_tests
+    if: needs.detect_lambda_version.outputs.version_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,10 +150,12 @@ jobs:
   build_native_lambda:
     name: build-native-lambda
     runs-on: ubuntu-latest
-    needs: integration_tests
-    if: github.ref_name == 'main'
+    needs:
+      - detect_lambda_version
+      - integration_tests
+    if: github.ref_name == 'main' && needs.detect_lambda_version.outputs.version_changed == 'true'
     permissions:
-      contents: read
+      contents: write
     environment:
       name: lab
     env:
@@ -67,20 +163,29 @@ jobs:
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
       LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET || vars.TF_STATE_BUCKET }}
       LAMBDA_ARTIFACT_PREFIX: ${{ vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
-      LAMBDA_ARTIFACT_VERSION: ${{ github.sha }}
       LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_ARTIFACT_VERSION: ${{ needs.detect_lambda_version.outputs.current_version }}
+      LAMBDA_RELEASE_ASSET: ${{ needs.detect_lambda_version.outputs.release_asset }}
+      LAMBDA_RELEASE_TAG: ${{ needs.detect_lambda_version.outputs.release_tag }}
+      LAMBDA_RELEASE_VERSION: ${{ needs.detect_lambda_version.outputs.current_version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Validate release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${LAMBDA_RELEASE_VERSION}" == *-SNAPSHOT ]]; then
+            echo "A versao fechada da Lambda nao pode ser SNAPSHOT: ${LAMBDA_RELEASE_VERSION}" >&2
+            exit 1
+          fi
+
+          if gh release view "${LAMBDA_RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "A release ${LAMBDA_RELEASE_TAG} ja existe. Incremente a versao da Lambda antes de gerar novo pacote." >&2
+            exit 1
+          fi
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -95,29 +200,58 @@ jobs:
           chmod +x ./scripts/build-native-lambda.sh
           chmod +x ./scripts/s3-native-lambda-artifact.sh
 
-      - name: Skip S3 native package cache
-        if: env.LAMBDA_ARTIFACT_BUCKET == ''
-        run: echo "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; build nativo sera executado sem cache S3."
-
-      - name: Restore native Lambda package from S3
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
-        id: native-package
-        run: ./scripts/s3-native-lambda-artifact.sh restore
-
       - name: Build native Lambda package
-        if: steps.native-package.outputs.restored != 'true'
         run: ./scripts/build-native-lambda.sh -B -DskipTests -DskipITs=true -DfailIfNoTests=false
 
-      - name: Store native Lambda package in S3
-        if: steps.native-package.outputs.restored != 'true' && env.LAMBDA_ARTIFACT_BUCKET != ''
+      - name: Prepare GitHub release asset
+        shell: bash
+        run: |
+          cp target/function.zip "target/${LAMBDA_RELEASE_ASSET}"
+          sha256sum "target/${LAMBDA_RELEASE_ASSET}" > target/checksums.txt
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${LAMBDA_RELEASE_TAG}" \
+            "target/${LAMBDA_RELEASE_ASSET}" \
+            target/checksums.txt \
+            --target "${GITHUB_SHA}" \
+            --title "${LAMBDA_RELEASE_TAG}" \
+            --notes "Lambda nativa oficina-auth-lambda ${LAMBDA_RELEASE_VERSION} (${LAMBDA_ARCHITECTURE})."
+
+      - name: Download Lambda package from GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf target/github-release
+          mkdir -p target/github-release
+          gh release download "${LAMBDA_RELEASE_TAG}" \
+            --pattern "${LAMBDA_RELEASE_ASSET}" \
+            --dir target/github-release \
+            --clobber
+          cmp "target/${LAMBDA_RELEASE_ASSET}" "target/github-release/${LAMBDA_RELEASE_ASSET}"
+          cp "target/github-release/${LAMBDA_RELEASE_ASSET}" target/function.zip
+          cp "target/github-release/${LAMBDA_RELEASE_ASSET}" target/oficina-auth-lambda-native.zip
+
+      - name: Configure AWS credentials
+        if: env.LAMBDA_ARTIFACT_BUCKET != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Store GitHub release package in S3
+        if: env.LAMBDA_ARTIFACT_BUCKET != ''
         run: ./scripts/s3-native-lambda-artifact.sh store
 
-      - name: Reuse stored native Lambda package
-        if: steps.native-package.outputs.restored == 'true'
-        run: |
-          test -f target/function.zip
-          test -f target/oficina-auth-lambda-native.zip
-          echo "Pacote nativo restaurado do S3 para $GITHUB_SHA"
+      - name: Skip S3 native package store
+        if: env.LAMBDA_ARTIFACT_BUCKET == ''
+        run: echo "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; pacote ficou somente no GitHub Release."
 
       - name: Upload Lambda package
         uses: actions/upload-artifact@v4
@@ -126,13 +260,17 @@ jobs:
           path: |
             target/function.zip
             target/oficina-auth-lambda-native.zip
+            target/${{ needs.detect_lambda_version.outputs.release_asset }}
+            target/checksums.txt
           if-no-files-found: error
 
   deploy_lambda:
     name: deploy-lambda
     runs-on: ubuntu-latest
-    needs: build_native_lambda
-    if: github.ref_name == 'main'
+    needs:
+      - detect_lambda_version
+      - build_native_lambda
+    if: github.ref_name == 'main' && needs.detect_lambda_version.outputs.version_changed == 'true'
     permissions:
       contents: read
     environment:
