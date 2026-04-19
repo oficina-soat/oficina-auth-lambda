@@ -1,14 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 COMMAND="${1:-}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 LAMBDA_ARTIFACT_BUCKET="${LAMBDA_ARTIFACT_BUCKET:-${TF_STATE_BUCKET:-}}"
 LAMBDA_ARTIFACT_PREFIX="${LAMBDA_ARTIFACT_PREFIX:-oficina/lab/lambda/oficina-auth-lambda}"
-LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${GITHUB_SHA:-}}"
 LAMBDA_ARTIFACT_QUALIFIER="${LAMBDA_ARTIFACT_QUALIFIER:-${LAMBDA_ARCHITECTURE:-x86_64}}"
 FUNCTION_ARTIFACT_PATH="${FUNCTION_ARTIFACT_PATH:-target/function.zip}"
 NAMED_ARTIFACT_PATH="${NAMED_ARTIFACT_PATH:-target/oficina-auth-lambda-native.zip}"
+
+pom_version() {
+  local pom="${REPO_ROOT}/pom.xml"
+
+  if [[ ! -f "${pom}" ]]; then
+    return
+  fi
+
+  sed -n '0,/<version>[[:space:]]*/{
+    s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
+  }' "${pom}" | head -n 1
+}
+
+LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${LAMBDA_RELEASE_VERSION:-$(pom_version)}}"
+LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${GITHUB_SHA:-}}"
 
 usage() {
   cat <<EOF
@@ -19,7 +36,7 @@ Variaveis:
   AWS_REGION
   LAMBDA_ARTIFACT_BUCKET ou TF_STATE_BUCKET (opcional para restore; obrigatorio para store)
   LAMBDA_ARTIFACT_PREFIX       Default: oficina/lab/lambda/oficina-auth-lambda
-  LAMBDA_ARTIFACT_VERSION      Default: GITHUB_SHA
+  LAMBDA_ARTIFACT_VERSION      Default: project.version do pom.xml; fallback: GITHUB_SHA
   LAMBDA_ARTIFACT_QUALIFIER    Default: LAMBDA_ARCHITECTURE ou x86_64
   FUNCTION_ARTIFACT_PATH       Default: target/function.zip
   NAMED_ARTIFACT_PATH          Default: target/oficina-auth-lambda-native.zip
