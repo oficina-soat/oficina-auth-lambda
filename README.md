@@ -153,7 +153,7 @@ Depois da release, o workflow baixa o asset da própria release e só então env
 O deploy automatizado fica em [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
 - `develop`: quando a release da versão atual ainda não existe, executa testes unitários e de integração e cria ou atualiza o PR para `main`
-- `main`: após o merge do PR, executa build nativo, GitHub Release, S3 e deploy quando a release da versão atual ainda não existe
+- PR mergeado em `main`: executa build nativo, GitHub Release, S3 e deploy quando a release da versão atual ainda não existe
 
 Quando a release da versão atual já existe, commits novos não geram build, release nem deploy. Em `main`, versões fechadas não podem terminar com `-SNAPSHOT`, e uma versão já publicada não é sobrescrita.
 

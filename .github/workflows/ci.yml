@@ -2,10 +2,14 @@ name: CI/CD
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
   push:
     branches:
       - develop
-      - main
 
 concurrency:
   group: lab-lambda
@@ -15,6 +19,7 @@ jobs:
   detect_lambda_version:
     name: detect-lambda-version
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     permissions:
       contents: read
     outputs:
@@ -188,7 +193,7 @@ jobs:
             "- Release alvo: ${RELEASE_TAG}" \
             "- Branch origem: ${GITHUB_REF_NAME}" \
             "- Commit validado: ${GITHUB_SHA}" \
-            "Ao aceitar este PR, o push em main executa build nativo, release e deploy.")"
+            "Ao aceitar este PR, o merge em main executa build nativo, release e deploy.")"
 
           pr_number="$(gh pr list \
             --repo "${GITHUB_REPOSITORY}" \
@@ -221,9 +226,11 @@ jobs:
       - integration_tests
     if: >
       always() &&
-      github.ref_name == 'main' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
       needs.detect_lambda_version.outputs.deploy_needed == 'true' &&
-      (github.event_name == 'push' || needs.integration_tests.result == 'success')
+      needs.integration_tests.result == 'skipped'
     permissions:
       contents: write
     environment:
@@ -340,7 +347,11 @@ jobs:
     needs:
       - detect_lambda_version
       - build_native_lambda
-    if: github.ref_name == 'main' && needs.detect_lambda_version.outputs.deploy_needed == 'true'
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      needs.detect_lambda_version.outputs.deploy_needed == 'true'
     permissions:
       contents: read
     environment:

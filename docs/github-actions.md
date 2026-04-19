@@ -11,8 +11,8 @@ Workflows disponíveis:
 ## Gatilho
 
 - `push` em `develop`: verifica se a release da versão atual ainda não existe; quando houver deploy pendente, executa testes unitários e de integração e cria ou atualiza o PR `develop -> main`
-- `push` em `main`: após o merge do PR, executa build nativo, GitHub Release, armazenamento S3 e deploy quando a release da versão atual ainda não existir
-- `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; executa somente quando a release da versão atual ainda não existir. Em `main`, o disparo manual também executa os testes antes do build nativo
+- `pull_request` fechado e mergeado em `main`: executa build nativo, GitHub Release, armazenamento S3 e deploy quando a release da versão atual ainda não existir
+- `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; executa testes somente quando a release da versão atual ainda não existir; não executa build nativo, release nem deploy
 - `workflow_dispatch` em `redeploy-lambda-lab.yml`: redeploy manual da release já fechada, somente quando a branch selecionada for `main`
 - `workflow_dispatch` em `cleanup-lambda-lab.yml`: cleanup manual com confirmação `CLEANUP`
 
@@ -33,7 +33,7 @@ O GitHub Release é a origem oficial da versão fechada da Lambda. Em `main`, qu
 5. armazena esse mesmo pacote no S3, quando o bucket estiver configurado
 6. faz o deploy da Lambda
 
-No fluxo automático, os testes unitários e de integração rodam antes, no `push` em `develop`, e o PR só é criado ou atualizado se esses testes passarem. Quando o PR é aceito, o `push` em `main` começa no build nativo. No disparo manual de `ci.yml` em `main`, os testes ainda rodam antes do build nativo.
+No fluxo automático, os testes unitários e de integração rodam antes, no `push` em `develop`, e o PR só é criado ou atualizado se esses testes passarem. Quando o PR é aceito, o evento de PR mergeado em `main` começa no build nativo.
 
 O PR automático de deploy não é aberto para versões `-SNAPSHOT`. Versões em `main` também não podem terminar com `-SNAPSHOT`. Se a versão mudar para uma release que já existe, o workflow falha e exige incremento de versão antes de gerar outro pacote.
 
