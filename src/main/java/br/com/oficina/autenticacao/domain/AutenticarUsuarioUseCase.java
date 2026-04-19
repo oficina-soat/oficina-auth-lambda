@@ -14,6 +14,7 @@ import jakarta.transaction.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @ApplicationScoped
@@ -23,35 +24,47 @@ public class AutenticarUsuarioUseCase {
 
     @Transactional
     public AutenticarUsuarioResponse execute(AutenticarUsuarioRequest req) {
-        if (req == null
-                || req.cpf() == null || req.cpf().trim().isEmpty()
-                || req.password() == null || req.password().trim().isEmpty()) {
-            throw new CredenciaisObrigatoriasException();
-        }
-        var cpf = new Cpf(req.cpf()).valor();
-        var now = Instant.now();
+        var timing = new AutenticacaoTiming();
 
-        var usuarioEntity = UsuarioEntity.findByDocumento(cpf);
-        if (usuarioEntity == null) {
-            throw new UsuarioNaoEncontradoException();
-        }
-        if (usuarioEntity.status != UsuarioStatus.ATIVO) {
-            throw new UsuarioInativoException();
-        }
-        if (!BcryptUtil.matches(req.password(), usuarioEntity.password)) {
-            throw new SenhaInvalidaException();
-        }
+        try {
+            if (req == null
+                    || req.cpf() == null || req.cpf().trim().isEmpty()
+                    || req.password() == null || req.password().trim().isEmpty()) {
+                throw new CredenciaisObrigatoriasException();
+            }
 
-        return new AutenticarUsuarioResponse(
-                Jwt.issuer(ISSUER)
-                        .subject(usuarioEntity.documento())
-                        .groups(usuarioEntity.papelEntities.stream()
-                                .map(papelEntity -> papelEntity.papel)
-                                .collect(Collectors.toSet()))
-                        .issuedAt(now.getEpochSecond())
-                        .expiresAt(now.plus(TOKEN_TTL).getEpochSecond())
-                        .sign(),
-                "Bearer",
-                (int) TOKEN_TTL.toSeconds());
+            var cpf = timing.cpf(() -> new Cpf(req.cpf()).valor());
+            var usuarioEntity = timing.db(() -> UsuarioEntity.findByDocumento(cpf));
+
+            if (usuarioEntity == null) {
+                throw new UsuarioNaoEncontradoException();
+            }
+            if (usuarioEntity.status != UsuarioStatus.ATIVO) {
+                throw new UsuarioInativoException();
+            }
+
+            boolean passwordMatches = timing.bcrypt(() -> BcryptUtil.matches(req.password(), usuarioEntity.password));
+            if (!passwordMatches) {
+                throw new SenhaInvalidaException();
+            }
+
+            var now = Instant.now();
+            Set<String> grupos = usuarioEntity.papelEntities.stream()
+                    .map(papelEntity -> papelEntity.papel)
+                    .collect(Collectors.toSet());
+
+            String accessToken = timing.jwt(() -> Jwt.issuer(ISSUER)
+                    .subject(usuarioEntity.documento())
+                    .groups(grupos)
+                    .issuedAt(now.getEpochSecond())
+                    .expiresAt(now.plus(TOKEN_TTL).getEpochSecond())
+                    .sign());
+
+            timing.success();
+            return new AutenticarUsuarioResponse(accessToken, "Bearer", (int) TOKEN_TTL.toSeconds());
+        } catch (RuntimeException exception) {
+            timing.failure(exception);
+            throw exception;
+        }
     }
 }

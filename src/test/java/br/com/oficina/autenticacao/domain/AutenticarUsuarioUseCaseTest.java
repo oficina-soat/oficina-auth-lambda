@@ -21,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
+import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -99,7 +100,7 @@ class AutenticarUsuarioUseCaseTest {
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class)) {
             panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
-            when(query.firstResult()).thenReturn(null);
+            when(query.singleResultOptional()).thenReturn(Optional.empty());
 
             UsuarioNaoEncontradoException exception = assertThrowsInChain(
                     UsuarioNaoEncontradoException.class,
@@ -117,7 +118,7 @@ class AutenticarUsuarioUseCaseTest {
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class)) {
             panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
-            when(query.firstResult()).thenReturn(usuario);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
 
             SenhaInvalidaException exception = assertThrowsInChain(
                     SenhaInvalidaException.class,
@@ -135,7 +136,7 @@ class AutenticarUsuarioUseCaseTest {
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class)) {
             panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
-            when(query.firstResult()).thenReturn(usuario);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
 
             UsuarioInativoException exception = assertThrowsInChain(
                     UsuarioInativoException.class,
@@ -161,7 +162,7 @@ class AutenticarUsuarioUseCaseTest {
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
             panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
-            when(query.firstResult()).thenReturn(usuario);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
             jwtMock.when(() -> Jwt.issuer("oficina-api")).thenReturn(jwtClaimsBuilder);
 
             AutenticarUsuarioResponse response =
@@ -187,7 +188,7 @@ class AutenticarUsuarioUseCaseTest {
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
             panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
-            when(query.firstResult()).thenReturn(usuario);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
             jwtMock.when(() -> Jwt.issuer("oficina-api")).thenReturn(jwtClaimsBuilder);
 
             AutenticarUsuarioResponse response =
@@ -226,7 +227,7 @@ class AutenticarUsuarioUseCaseTest {
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
             panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
-            when(query.firstResult()).thenReturn(usuario);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
             jwtMock.when(() -> Jwt.issuer("oficina-api")).thenReturn(jwtClaimsBuilder);
 
             AutenticarUsuarioResponse response =

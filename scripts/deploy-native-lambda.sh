@@ -14,7 +14,7 @@ DB_SECURITY_GROUP_IDS="${DB_SECURITY_GROUP_IDS:-}"
 LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-oficina-auth-lambda-lab}"
 LAMBDA_RUNTIME="${LAMBDA_RUNTIME:-provided.al2023}"
 LAMBDA_ARCHITECTURE="${LAMBDA_ARCHITECTURE:-x86_64}"
-LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-256}"
+LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-1024}"
 LAMBDA_TIMEOUT="${LAMBDA_TIMEOUT:-15}"
 LAMBDA_ROLE_ARN="${LAMBDA_ROLE_ARN:-}"
 LAMBDA_VPC_ID="${LAMBDA_VPC_ID:-}"
@@ -69,7 +69,7 @@ Variaveis opcionais:
   LAMBDA_ROLE_ARN              Obrigatoria apenas na primeira criacao
   LAMBDA_RUNTIME               Default: provided.al2023
   LAMBDA_ARCHITECTURE          Default: x86_64
-  LAMBDA_MEMORY_SIZE           Default: 256
+  LAMBDA_MEMORY_SIZE           Default: 1024
   LAMBDA_TIMEOUT               Default: 15
   LAMBDA_VPC_ID                Override da VPC
   LAMBDA_SUBNET_IDS            Lista CSV ou JSON de subnets

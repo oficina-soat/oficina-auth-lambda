@@ -44,7 +44,10 @@ public class UsuarioEntity extends PanacheEntity {
     public UsuarioStatus status;
 
     public static UsuarioEntity findByDocumento(String cpf) {
-        return UsuarioEntity.find(FIND_BY_DOCUMENTO_QUERY, cpf).firstResult();
+        return UsuarioEntity.find(FIND_BY_DOCUMENTO_QUERY, cpf)
+                .singleResultOptional()
+                .map(UsuarioEntity.class::cast)
+                .orElse(null);
     }
 
     public String documento() {
