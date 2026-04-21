@@ -74,14 +74,26 @@ Secret opcional:
 
 Como o laboratório costuma recriar as credenciais a cada sessão, atualize esses secrets antes de executar deploy, redeploy ou cleanup.
 
-## Secrets da Lambda
+## Secrets e credenciais da Lambda
 
 - `LAMBDA_ROLE_ARN`: obrigatório apenas na primeira criação da função
-- `QUARKUS_DATASOURCE_USERNAME`
-- `QUARKUS_DATASOURCE_PASSWORD`
 - `QUARKUS_DATASOURCE_JDBC_URL`: opcional; quando ausente, o deploy monta a URL a partir do RDS
-- `MP_JWT_VERIFY_PUBLICKEY` ou `MP_JWT_VERIFY_PUBLICKEY_LOCATION`
-- `SMALLRYE_JWT_SIGN_KEY` ou `SMALLRYE_JWT_SIGN_KEY_LOCATION`
+- `QUARKUS_DATASOURCE_USERNAME` e `QUARKUS_DATASOURCE_PASSWORD`: exigidos somente quando `BOOTSTRAP_AUTH_DB_USER=false`
+- `AUTH_DB_PASSWORD`: opcional; quando ausente, o deploy gera ou reutiliza a senha salva no Secrets Manager
+- `MASTER_DB_PASSWORD`: opcional; normalmente o deploy lê a senha pelo secret master gerenciado pelo RDS
+- `MP_JWT_VERIFY_PUBLICKEY`/`SMALLRYE_JWT_SIGN_KEY`: exigidos somente quando `JWT_SECRET_SOURCE=env-vars`
+
+Por padrão, o deploy não exige secrets manuais para JWT nem para usuário de banco. Ele usa o AWS Secrets Manager:
+
+- `JWT_SECRET_NAME=oficina/lab/jwt`, campos `privateKeyPem` e `publicKeyPem`
+- `AUTH_DB_SECRET_NAME=oficina/lab/database/auth-lambda`, campos `engine`, `host`, `port`, `dbname`, `username` e `password`
+
+Se o secret JWT não existir, o deploy gera um par RSA 2048 bits e salva no Secrets Manager. Se o secret de banco do auth-lambda não existir, o deploy gera a senha, cria/atualiza o role PostgreSQL `AUTH_DB_USER` no RDS e salva a credencial.
+
+Rotação é explícita:
+
+- `ROTATE_JWT_SECRET=true`: gera novo par JWT no Secrets Manager
+- `ROTATE_AUTH_DB_PASSWORD=true`: gera nova senha para `AUTH_DB_USER`
 
 ## Variables principais
 
@@ -92,6 +104,17 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 - `DB_NAME`: opcional; sobrescreve o database name retornado pelo RDS
 - `DB_SSLMODE`: default `require`
 - `DB_SECURITY_GROUP_IDS`: lista CSV ou JSON, opcional
+- `MASTER_SECRET_ARN`: secret master do RDS; quando ausente, o deploy descobre em `describe-db-instances`
+- `MASTER_DB_USER`: usuário master; quando ausente, o deploy lê do secret master ou do RDS
+- `BOOTSTRAP_AUTH_DB_USER`: default `true`; cria/atualiza usuário próprio da Lambda no RDS
+- `AUTH_DB_USER`: default `oficina_auth_lambda`
+- `AUTH_DB_ALLOW_SCHEMA_CHANGES`: default `false`; quando `true`, concede `CREATE` no schema `public`
+- `STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER`: default `true`
+- `AUTH_DB_SECRET_NAME`: default `oficina/lab/database/auth-lambda`
+- `AUTH_DB_SECRET_KMS_KEY_ID`: KMS key opcional para criação do secret de banco
+- `ROTATE_AUTH_DB_PASSWORD`: default `false`
+- `AUTO_ALLOW_DEPLOY_RUNNER_CIDR`: default `true`; libera temporariamente o IPv4 público do runner no security group do RDS para executar o bootstrap via `psql`
+- `CI_RUNNER_PUBLIC_IP_URL`: default `https://checkip.amazonaws.com`
 - `LAMBDA_FUNCTION_NAME`: default `oficina-auth-lambda-lab`
 - `LAMBDA_RUNTIME`: default `provided.al2023`
 - `LAMBDA_ARCHITECTURE`: default `x86_64`
@@ -102,6 +125,14 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 - `LAMBDA_SECURITY_GROUP_NAME`: default `<LAMBDA_FUNCTION_NAME>-sg`
 - `LAMBDA_ARTIFACT_BUCKET`: bucket S3 opcional para armazenar o pacote nativo; fallback para `TF_STATE_BUCKET`
 - `LAMBDA_ARTIFACT_PREFIX`: prefixo S3 dos pacotes nativos. Default `oficina/lab/lambda/oficina-auth-lambda`
+- `JWT_SECRET_SOURCE`: default `aws-secrets-manager`; aceita `aws-secrets-manager`, `local-files` ou `env-vars`
+- `JWT_SECRET_NAME`: default `oficina/lab/jwt`
+- `JWT_SECRET_PRIVATE_KEY_FIELD`: default `privateKeyPem`
+- `JWT_SECRET_PUBLIC_KEY_FIELD`: default `publicKeyPem`
+- `JWT_SECRET_KMS_KEY_ID`: KMS key opcional para criação do secret JWT
+- `ROTATE_JWT_SECRET`: default `false`
+- `JWT_DIR`: default `.tmp/jwt`; usado com `JWT_SECRET_SOURCE=local-files`
+- `REGENERATE_JWT`: default `false`; usado com `JWT_SECRET_SOURCE=local-files`
 
 ## Variables do API Gateway
 
@@ -152,6 +183,17 @@ Ele preserva:
 ## Integração com os repos de infra
 
 O RDS é descoberto pelo `DB_INSTANCE_IDENTIFIER` criado em `../oficina-infra-db`. O default deste repo é `oficina-postgres-lab`, mesmo default do repo de banco. A VPC e as subnets da Lambda também são descobertas a partir do DB subnet group do RDS, salvo quando `LAMBDA_VPC_ID` e `LAMBDA_SUBNET_IDS` forem informados explicitamente.
+
+O usuário de banco do auth-lambda é bootstrapado diretamente no RDS durante o deploy, seguindo o mesmo modelo do bootstrap de usuário de aplicação do `../oficina-infra-db`: senha gerada quando ausente, role PostgreSQL idempotente e credencial persistida no Secrets Manager. O runner precisa de `psql` disponível e conectividade ao endpoint do RDS. Com o padrão do laboratório, `AUTO_ALLOW_DEPLOY_RUNNER_CIDR=true` adiciona uma regra `/32` temporária no security group do RDS e a remove ao final do script.
+
+As credenciais AWS usadas pelo workflow precisam permitir, além das ações já necessárias para Lambda/API Gateway/RDS/EC2, estas operações:
+
+- `secretsmanager:DescribeSecret`
+- `secretsmanager:CreateSecret`
+- `secretsmanager:GetSecretValue`
+- `secretsmanager:PutSecretValue`
+- `ec2:AuthorizeSecurityGroupIngress`
+- `ec2:RevokeSecurityGroupIngress`
 
 O API Gateway é descoberto por `API_GATEWAY_ID` ou por `API_GATEWAY_NAME`. O default por nome segue `../oficina-infra-k8s`: `<EKS_CLUSTER_NAME>-http-api`.
 
