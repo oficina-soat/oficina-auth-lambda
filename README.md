@@ -19,6 +19,9 @@ O projeto isola o fluxo de autenticação que antes ficava acoplado ao monólito
 - função AWS Lambda
 - security group dedicado da Lambda
 - liberação do security group da Lambda no security group do RDS
+- criação/atualização do usuário PostgreSQL exclusivo da Lambda no RDS
+- secret `oficina/lab/database/auth-lambda` com a credencial do usuário da Lambda
+- secret `oficina/lab/jwt` com o par de chaves JWT compartilhado com `../oficina-app`
 - rota `AWS_PROXY` no HTTP API Gateway existente, quando `ATTACH_API_GATEWAY=true`
 - log group da Lambda no cleanup manual
 
@@ -29,6 +32,7 @@ O projeto isola o fluxo de autenticação que antes ficava acoplado ao monólito
 - criação da VPC/subnets compartilhadas
 - criação de roles IAM do laboratório
 - migrations completas do schema da aplicação
+- rotação automática destrutiva de chaves JWT ou senha do banco sem opt-in
 
 Esses recursos ficam nos repositórios irmãos:
 
@@ -152,21 +156,27 @@ Depois da release, o workflow baixa o asset da própria release e só então env
 
 O deploy automatizado fica em [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
-- `develop`: quando a release da versão atual ainda não existe, executa testes unitários e de integração e cria ou atualiza o PR para `main`
+- `develop`: cria ou atualiza o PR para `main`; quando a release da versão atual ainda não existe, executa testes unitários e de integração antes de abrir ou atualizar o PR
 - PR mergeado em `main`: executa build nativo, GitHub Release, S3 e deploy quando a release da versão atual ainda não existe
 
-Quando a release da versão atual já existe, commits novos não geram build, release nem deploy. Em `main`, versões fechadas não podem terminar com `-SNAPSHOT`, e uma versão já publicada não é sobrescrita.
+Quando a release da versão atual já existe, commits novos ainda geram ou atualizam o PR para `main`, mas não geram build, release nem deploy. Em `main`, versões fechadas não podem terminar com `-SNAPSHOT`, e uma versão já publicada não é sobrescrita.
 
 O deploy:
 
 - baixa o pacote nativo da Lambda
-- descobre VPC/subnets pelo EKS, salvo overrides
+- descobre VPC/subnets pelo RDS, com fallback opcional pelo EKS salvo overrides
 - descobre endpoint, porta e security groups do RDS
 - cria ou reutiliza o security group dedicado da Lambda
 - autoriza o security group da Lambda no RDS
+- cria ou reutiliza o secret JWT `oficina/lab/jwt`; se ele não existir, gera um par RSA 2048 bits
+- cria ou atualiza o usuário PostgreSQL próprio `oficina_auth_lambda`; se a senha ainda não existir, gera e salva em `oficina/lab/database/auth-lambda`
 - cria ou atualiza a função Lambda com `VpcConfig` e variáveis do Quarkus
 - cria ou atualiza a rota `POST /auth` no HTTP API Gateway existente
 - adiciona permissão para o API Gateway invocar a Lambda
+
+Por padrão, o deploy usa o mesmo secret JWT do `../oficina-app` (`JWT_SECRET_NAME=oficina/lab/jwt`), com os campos `privateKeyPem` e `publicKeyPem`. Assim, os tokens emitidos pelo auth-lambda continuam compatíveis com a aplicação. Para rotacionar explicitamente o par JWT, use `ROTATE_JWT_SECRET=true`; tokens assinados com a chave anterior deixam de validar depois que os consumidores forem atualizados.
+
+O usuário do banco é separado do usuário da aplicação principal. O deploy descobre o secret master gerenciado pelo RDS, libera temporariamente o IPv4 público do runner no security group do RDS quando `AUTO_ALLOW_DEPLOY_RUNNER_CIDR=true`, executa o bootstrap via `psql`, remove a regra temporária ao sair e injeta as credenciais geradas nas variáveis da Lambda. Para voltar ao modo antigo, configure `BOOTSTRAP_AUTH_DB_USER=false` e informe `QUARKUS_DATASOURCE_USERNAME`/`QUARKUS_DATASOURCE_PASSWORD`.
 
 Detalhes de variáveis, secrets e workflows auxiliares: [docs/github-actions.md](docs/github-actions.md).
 

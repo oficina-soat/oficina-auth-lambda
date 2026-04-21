@@ -127,6 +127,19 @@ jobs:
       DB_NAME: ${{ vars.DB_NAME }}
       DB_SSLMODE: ${{ vars.DB_SSLMODE || 'require' }}
       DB_SECURITY_GROUP_IDS: ${{ vars.DB_SECURITY_GROUP_IDS }}
+      MASTER_SECRET_ARN: ${{ vars.MASTER_SECRET_ARN }}
+      MASTER_DB_USER: ${{ vars.MASTER_DB_USER }}
+      MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
+      BOOTSTRAP_AUTH_DB_USER: ${{ vars.BOOTSTRAP_AUTH_DB_USER || 'true' }}
+      AUTH_DB_USER: ${{ vars.AUTH_DB_USER || 'oficina_auth_lambda' }}
+      AUTH_DB_PASSWORD: ${{ secrets.AUTH_DB_PASSWORD }}
+      AUTH_DB_ALLOW_SCHEMA_CHANGES: ${{ vars.AUTH_DB_ALLOW_SCHEMA_CHANGES || 'false' }}
+      STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER: ${{ vars.STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER || 'true' }}
+      AUTH_DB_SECRET_NAME: ${{ vars.AUTH_DB_SECRET_NAME || 'oficina/lab/database/auth-lambda' }}
+      AUTH_DB_SECRET_KMS_KEY_ID: ${{ vars.AUTH_DB_SECRET_KMS_KEY_ID }}
+      ROTATE_AUTH_DB_PASSWORD: ${{ vars.ROTATE_AUTH_DB_PASSWORD || 'false' }}
+      AUTO_ALLOW_DEPLOY_RUNNER_CIDR: ${{ vars.AUTO_ALLOW_DEPLOY_RUNNER_CIDR || 'true' }}
+      CI_RUNNER_PUBLIC_IP_URL: ${{ vars.CI_RUNNER_PUBLIC_IP_URL || 'https://checkip.amazonaws.com' }}
       LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME || 'oficina-auth-lambda-lab' }}
       LAMBDA_RUNTIME: ${{ vars.LAMBDA_RUNTIME || 'provided.al2023' }}
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
@@ -152,6 +165,14 @@ jobs:
       MP_JWT_VERIFY_PUBLICKEY_LOCATION: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY_LOCATION }}
       SMALLRYE_JWT_SIGN_KEY: ${{ secrets.SMALLRYE_JWT_SIGN_KEY }}
       SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
+      JWT_SECRET_SOURCE: ${{ vars.JWT_SECRET_SOURCE || 'aws-secrets-manager' }}
+      JWT_SECRET_NAME: ${{ vars.JWT_SECRET_NAME || 'oficina/lab/jwt' }}
+      JWT_SECRET_PRIVATE_KEY_FIELD: ${{ vars.JWT_SECRET_PRIVATE_KEY_FIELD || 'privateKeyPem' }}
+      JWT_SECRET_PUBLIC_KEY_FIELD: ${{ vars.JWT_SECRET_PUBLIC_KEY_FIELD || 'publicKeyPem' }}
+      JWT_SECRET_KMS_KEY_ID: ${{ vars.JWT_SECRET_KMS_KEY_ID }}
+      ROTATE_JWT_SECRET: ${{ vars.ROTATE_JWT_SECRET || 'false' }}
+      JWT_DIR: ${{ vars.JWT_DIR || '.tmp/jwt' }}
+      REGENERATE_JWT: ${{ vars.REGENERATE_JWT || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -169,16 +190,19 @@ jobs:
           [[ -n "${AWS_ACCESS_KEY_ID}" ]] || missing+=("AWS_ACCESS_KEY_ID")
           [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || missing+=("AWS_SECRET_ACCESS_KEY")
           [[ -n "${LAMBDA_FUNCTION_NAME}" ]] || missing+=("LAMBDA_FUNCTION_NAME")
-          [[ -n "${QUARKUS_DATASOURCE_USERNAME}" ]] || missing+=("QUARKUS_DATASOURCE_USERNAME")
-          [[ -n "${QUARKUS_DATASOURCE_PASSWORD}" ]] || missing+=("QUARKUS_DATASOURCE_PASSWORD")
           [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${API_GATEWAY_ID}" || -n "${API_GATEWAY_NAME}" ]] || missing+=("API_GATEWAY_ID|API_GATEWAY_NAME")
           [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${API_GATEWAY_ROUTE_KEY}" ]] || missing+=("API_GATEWAY_ROUTE_KEY")
 
-          if [[ -z "${MP_JWT_VERIFY_PUBLICKEY}" && -z "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" ]]; then
+          if [[ "${BOOTSTRAP_AUTH_DB_USER}" != "true" ]]; then
+            [[ -n "${QUARKUS_DATASOURCE_USERNAME}" ]] || missing+=("QUARKUS_DATASOURCE_USERNAME")
+            [[ -n "${QUARKUS_DATASOURCE_PASSWORD}" ]] || missing+=("QUARKUS_DATASOURCE_PASSWORD")
+          fi
+
+          if [[ "${JWT_SECRET_SOURCE}" == "env-vars" && -z "${MP_JWT_VERIFY_PUBLICKEY}" && -z "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" ]]; then
             missing+=("MP_JWT_VERIFY_PUBLICKEY|MP_JWT_VERIFY_PUBLICKEY_LOCATION")
           fi
 
-          if [[ -z "${SMALLRYE_JWT_SIGN_KEY}" && -z "${SMALLRYE_JWT_SIGN_KEY_LOCATION}" ]]; then
+          if [[ "${JWT_SECRET_SOURCE}" == "env-vars" && -z "${SMALLRYE_JWT_SIGN_KEY}" && -z "${SMALLRYE_JWT_SIGN_KEY_LOCATION}" ]]; then
             missing+=("SMALLRYE_JWT_SIGN_KEY|SMALLRYE_JWT_SIGN_KEY_LOCATION")
           fi
 
