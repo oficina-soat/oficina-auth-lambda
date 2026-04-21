@@ -167,15 +167,22 @@ jobs:
       - detect_lambda_version
       - integration_tests
     if: >
+      always() &&
       github.event_name == 'push' &&
       github.ref_name == 'develop' &&
-      needs.detect_lambda_version.outputs.deploy_needed == 'true'
+      needs.detect_lambda_version.result == 'success' &&
+      (
+        needs.detect_lambda_version.outputs.deploy_needed != 'true' ||
+        needs.integration_tests.result == 'success'
+      )
     permissions:
       contents: read
       pull-requests: write
     env:
       CURRENT_VERSION: ${{ needs.detect_lambda_version.outputs.current_version }}
+      DEPLOY_NEEDED: ${{ needs.detect_lambda_version.outputs.deploy_needed }}
       GH_TOKEN: ${{ github.token }}
+      RELEASE_EXISTS: ${{ needs.detect_lambda_version.outputs.release_exists }}
       RELEASE_TAG: ${{ needs.detect_lambda_version.outputs.release_tag }}
     steps:
       - name: Create or update deploy pull request
@@ -186,14 +193,27 @@ jobs:
             exit 1
           fi
 
-          title="Deploy oficina-auth-lambda ${RELEASE_TAG}"
-          body="$(printf '%s\n\n%s\n%s\n%s\n%s\n\n%s\n' \
-            "Deploy automatico preparado pelo CI apos testes unitarios e integrados." \
-            "- Versao: ${CURRENT_VERSION}" \
-            "- Release alvo: ${RELEASE_TAG}" \
-            "- Branch origem: ${GITHUB_REF_NAME}" \
-            "- Commit validado: ${GITHUB_SHA}" \
-            "Ao aceitar este PR, o merge em main executa build nativo, release e deploy.")"
+          if [[ "${DEPLOY_NEEDED}" == "true" ]]; then
+            title="Deploy oficina-auth-lambda ${RELEASE_TAG}"
+            body="$(printf '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+              "Deploy automatico preparado pelo CI apos testes unitarios e integrados." \
+              "- Versao: ${CURRENT_VERSION}" \
+              "- Release alvo: ${RELEASE_TAG}" \
+              "- Release existente: ${RELEASE_EXISTS}" \
+              "- Branch origem: ${GITHUB_REF_NAME}" \
+              "- Commit validado: ${GITHUB_SHA}" \
+              "Ao aceitar este PR, o merge em main executa build nativo, release e deploy.")"
+          else
+            title="Atualiza oficina-auth-lambda ${RELEASE_TAG}"
+            body="$(printf '%s\n\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
+              "PR automatico preparado pelo CI para sincronizar develop com main." \
+              "- Versao: ${CURRENT_VERSION}" \
+              "- Release alvo: ${RELEASE_TAG}" \
+              "- Release existente: ${RELEASE_EXISTS}" \
+              "- Branch origem: ${GITHUB_REF_NAME}" \
+              "- Commit validado: ${GITHUB_SHA}" \
+              "Como a release da versao atual ja existe, o merge em main nao executa novo build nativo, release nem deploy.")"
+          fi
 
           pr_number="$(gh pr list \
             --repo "${GITHUB_REPOSITORY}" \
