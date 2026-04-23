@@ -55,6 +55,7 @@ class UsuarioResourceQuarkusTest {
         assertEquals("Bearer", response.token_type());
         assertEquals(3600, response.expires_in());
         assertEquals(DOCUMENTO_ATIVO, token.getSubject());
+        assertEquals(Set.of("oficina-app"), token.getAudience());
         assertEquals(Set.of("administrativo", "mecanico", "recepcionista"), token.getGroups());
     }
 

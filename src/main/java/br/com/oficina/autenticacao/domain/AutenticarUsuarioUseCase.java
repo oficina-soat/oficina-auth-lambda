@@ -17,10 +17,27 @@ import java.time.Instant;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
 @ApplicationScoped
 public class AutenticarUsuarioUseCase {
     private static final Duration TOKEN_TTL = Duration.ofMinutes(60);
-    private static final String ISSUER = "oficina-api";
+    private static final String DEFAULT_ISSUER = "oficina-api";
+    private static final String DEFAULT_AUDIENCE = "oficina-app";
+    private static final String DEFAULT_SCOPE = "oficina-app";
+    private static final String DEFAULT_KEY_ID = "oficina-lab-rsa";
+
+    @ConfigProperty(name = "oficina.auth.issuer", defaultValue = DEFAULT_ISSUER)
+    String issuer;
+
+    @ConfigProperty(name = "oficina.auth.audience", defaultValue = DEFAULT_AUDIENCE)
+    String audience;
+
+    @ConfigProperty(name = "oficina.auth.scope", defaultValue = DEFAULT_SCOPE)
+    String scope;
+
+    @ConfigProperty(name = "oficina.auth.key-id", defaultValue = DEFAULT_KEY_ID)
+    String keyId;
 
     @Transactional
     public AutenticarUsuarioResponse execute(AutenticarUsuarioRequest req) {
@@ -53,11 +70,15 @@ public class AutenticarUsuarioUseCase {
                     .map(papelEntity -> papelEntity.papel)
                     .collect(Collectors.toSet());
 
-            String accessToken = timing.jwt(() -> Jwt.issuer(ISSUER)
+            String accessToken = timing.jwt(() -> Jwt.issuer(configured(issuer, DEFAULT_ISSUER))
                     .subject(usuarioEntity.documento())
+                    .audience(configured(audience, DEFAULT_AUDIENCE))
+                    .scope(configured(scope, DEFAULT_SCOPE))
                     .groups(grupos)
                     .issuedAt(now.getEpochSecond())
                     .expiresAt(now.plus(TOKEN_TTL).getEpochSecond())
+                    .jws()
+                    .keyId(configured(keyId, DEFAULT_KEY_ID))
                     .sign());
 
             timing.success();
@@ -66,5 +87,9 @@ public class AutenticarUsuarioUseCase {
             timing.failure(exception);
             throw exception;
         }
+    }
+
+    private static String configured(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

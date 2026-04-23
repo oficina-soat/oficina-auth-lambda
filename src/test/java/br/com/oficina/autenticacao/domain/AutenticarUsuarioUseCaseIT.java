@@ -42,6 +42,7 @@ class AutenticarUsuarioUseCaseIT {
         var token = jwtParser.parse(response.access_token());
 
         assertEquals(DOCUMENTO_MULTIPLOS_PAPEIS, token.getSubject());
+        assertEquals(Set.of("oficina-app"), token.getAudience());
         assertEquals(Set.of("administrativo", "mecanico"), token.getGroups());
         assertEquals("Bearer", response.token_type());
         assertEquals(3600, response.expires_in());

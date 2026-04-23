@@ -48,10 +48,15 @@ JWT_SECRET_KMS_KEY_ID="${JWT_SECRET_KMS_KEY_ID:-}"
 ROTATE_JWT_SECRET="${ROTATE_JWT_SECRET:-false}"
 JWT_DIR="${JWT_DIR:-.tmp/jwt}"
 REGENERATE_JWT="${REGENERATE_JWT:-false}"
+OFICINA_AUTH_ISSUER="${OFICINA_AUTH_ISSUER:-}"
+OFICINA_AUTH_AUDIENCE="${OFICINA_AUTH_AUDIENCE:-oficina-app}"
+OFICINA_AUTH_SCOPE="${OFICINA_AUTH_SCOPE:-oficina-app}"
+OFICINA_AUTH_KEY_ID="${OFICINA_AUTH_KEY_ID:-oficina-lab-rsa}"
 ATTACH_API_GATEWAY="${ATTACH_API_GATEWAY:-true}"
 API_GATEWAY_ID="${API_GATEWAY_ID:-}"
 API_GATEWAY_NAME="${API_GATEWAY_NAME:-${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}}"
 API_GATEWAY_ROUTE_KEY="${API_GATEWAY_ROUTE_KEY:-POST /auth}"
+API_GATEWAY_ROUTE_KEYS="${API_GATEWAY_ROUTE_KEYS:-${API_GATEWAY_ROUTE_KEY};POST /auth/token;GET /.well-known/openid-configuration;GET /.well-known/jwks.json}"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
 
@@ -115,10 +120,15 @@ Variaveis opcionais:
   ROTATE_JWT_SECRET            Gera novo par JWT no Secrets Manager. Default: false
   JWT_DIR                      Diretorio de chaves para JWT_SECRET_SOURCE=local-files
   REGENERATE_JWT               Regenera chaves locais. Default: false
+  OFICINA_AUTH_ISSUER          Issuer publico dos access tokens. Default: endpoint do API Gateway quando anexado
+  OFICINA_AUTH_AUDIENCE        Audience dos access tokens. Default: oficina-app
+  OFICINA_AUTH_SCOPE           Scope padrao dos access tokens. Default: oficina-app
+  OFICINA_AUTH_KEY_ID          kid usado no header JWS e no JWKS. Default: oficina-lab-rsa
   ATTACH_API_GATEWAY           Vincula a Lambda ao HTTP API. Default: true
   API_GATEWAY_ID               ID do HTTP API existente
   API_GATEWAY_NAME             Nome do HTTP API existente. Default: <EKS_CLUSTER_NAME>-http-api
   API_GATEWAY_ROUTE_KEY        Route key. Default: POST /auth
+  API_GATEWAY_ROUTE_KEYS       Route keys separados por ';'. Default inclui POST /auth, POST /auth/token e JWKS
   API_GATEWAY_PAYLOAD_FORMAT_VERSION Default: 2.0
   API_GATEWAY_TIMEOUT_MILLISECONDS   Default: 30000
 EOF
@@ -170,6 +180,13 @@ normalize_list() {
   fi
 
   printf '%s' "${value}" | tr -d '[:space:]'
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
 }
 
 require_valid_secret_id() {
@@ -643,6 +660,15 @@ resolve_api_gateway_id() {
     jq -r --arg name "${API_GATEWAY_NAME}" '[.[] | select(.Name == $name) | .ApiId][0] // empty'
 }
 
+api_gateway_endpoint() {
+  local api_id="$1"
+
+  aws --region "${AWS_REGION}" apigatewayv2 get-api \
+    --api-id "${api_id}" \
+    --query 'ApiEndpoint' \
+    --output text
+}
+
 route_integration_id() {
   local api_id="$1"
   local route_key="$2"
@@ -679,6 +705,46 @@ create_api_gateway_integration() {
     --output text
 }
 
+ensure_api_gateway_route() {
+  local api_id="$1"
+  local function_arn="$2"
+  local route_key="$3"
+
+  log "Garantindo rota ${route_key} no API Gateway ${api_id}"
+  local integration_id
+  integration_id="$(route_integration_id "${api_id}" "${route_key}")"
+
+  if [[ -n "${integration_id}" ]]; then
+    aws --region "${AWS_REGION}" apigatewayv2 update-integration \
+      --api-id "${api_id}" \
+      --integration-id "${integration_id}" \
+      --integration-type AWS_PROXY \
+      --integration-method POST \
+      --integration-uri "${function_arn}" \
+      --payload-format-version "${API_GATEWAY_PAYLOAD_FORMAT_VERSION}" \
+      --timeout-in-millis "${API_GATEWAY_TIMEOUT_MILLISECONDS}" >/dev/null
+  else
+    integration_id="$(create_api_gateway_integration "${api_id}" "${function_arn}")"
+  fi
+
+  local existing_route_id
+  existing_route_id="$(route_id "${api_id}" "${route_key}")"
+
+  if [[ -n "${existing_route_id}" ]]; then
+    aws --region "${AWS_REGION}" apigatewayv2 update-route \
+      --api-id "${api_id}" \
+      --route-id "${existing_route_id}" \
+      --authorization-type NONE \
+      --target "integrations/${integration_id}" >/dev/null
+  else
+    aws --region "${AWS_REGION}" apigatewayv2 create-route \
+      --api-id "${api_id}" \
+      --route-key "${route_key}" \
+      --authorization-type NONE \
+      --target "integrations/${integration_id}" >/dev/null
+  fi
+}
+
 ensure_api_gateway_integration() {
   if [[ "${ATTACH_API_GATEWAY}" != "true" ]]; then
     log "Vinculo com API Gateway desabilitado por ATTACH_API_GATEWAY=${ATTACH_API_GATEWAY}"
@@ -698,37 +764,14 @@ ensure_api_gateway_integration() {
   )"
   require_non_empty "${function_arn}" "function_arn"
 
-  log "Garantindo rota ${API_GATEWAY_ROUTE_KEY} no API Gateway ${api_id}"
-  local integration_id
-  integration_id="$(route_integration_id "${api_id}" "${API_GATEWAY_ROUTE_KEY}")"
-
-  if [[ -n "${integration_id}" ]]; then
-    aws --region "${AWS_REGION}" apigatewayv2 update-integration \
-      --api-id "${api_id}" \
-      --integration-id "${integration_id}" \
-      --integration-type AWS_PROXY \
-      --integration-method POST \
-      --integration-uri "${function_arn}" \
-      --payload-format-version "${API_GATEWAY_PAYLOAD_FORMAT_VERSION}" \
-      --timeout-in-millis "${API_GATEWAY_TIMEOUT_MILLISECONDS}" >/dev/null
-  else
-    integration_id="$(create_api_gateway_integration "${api_id}" "${function_arn}")"
-  fi
-
-  local existing_route_id
-  existing_route_id="$(route_id "${api_id}" "${API_GATEWAY_ROUTE_KEY}")"
-
-  if [[ -n "${existing_route_id}" ]]; then
-    aws --region "${AWS_REGION}" apigatewayv2 update-route \
-      --api-id "${api_id}" \
-      --route-id "${existing_route_id}" \
-      --target "integrations/${integration_id}" >/dev/null
-  else
-    aws --region "${AWS_REGION}" apigatewayv2 create-route \
-      --api-id "${api_id}" \
-      --route-key "${API_GATEWAY_ROUTE_KEY}" \
-      --target "integrations/${integration_id}" >/dev/null
-  fi
+  local route_key
+  IFS=';' read -r -a route_keys <<<"${API_GATEWAY_ROUTE_KEYS}"
+  for route_key in "${route_keys[@]}"; do
+    route_key="$(trim "${route_key}")"
+    if [[ -n "${route_key}" ]]; then
+      ensure_api_gateway_route "${api_id}" "${function_arn}" "${route_key}"
+    fi
+  done
 
   local account_id
   account_id="$(
@@ -855,6 +898,12 @@ if aws --region "${AWS_REGION}" lambda get-function --function-name "${LAMBDA_FU
   function_exists="true"
 fi
 
+if [[ -z "${OFICINA_AUTH_ISSUER}" && "${ATTACH_API_GATEWAY}" == "true" ]]; then
+  auth_api_id="$(resolve_api_gateway_id)"
+  require_non_empty "${auth_api_id}" "API_GATEWAY_ID"
+  OFICINA_AUTH_ISSUER="$(api_gateway_endpoint "${auth_api_id}")"
+fi
+
 current_env_file="$(mktemp)"
 desired_env_file="$(mktemp)"
 merged_env_file="$(mktemp)"
@@ -868,6 +917,10 @@ jq -n \
   --arg jwt_verify_publickey_location "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" \
   --arg jwt_sign_key "${SMALLRYE_JWT_SIGN_KEY}" \
   --arg jwt_sign_key_location "${SMALLRYE_JWT_SIGN_KEY_LOCATION}" \
+  --arg oficina_auth_issuer "${OFICINA_AUTH_ISSUER}" \
+  --arg oficina_auth_audience "${OFICINA_AUTH_AUDIENCE}" \
+  --arg oficina_auth_scope "${OFICINA_AUTH_SCOPE}" \
+  --arg oficina_auth_key_id "${OFICINA_AUTH_KEY_ID}" \
   '{
     DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
     QUARKUS_DATASOURCE_USERNAME: $datasource_username,
@@ -876,7 +929,11 @@ jq -n \
     MP_JWT_VERIFY_PUBLICKEY: $jwt_verify_publickey,
     MP_JWT_VERIFY_PUBLICKEY_LOCATION: $jwt_verify_publickey_location,
     SMALLRYE_JWT_SIGN_KEY: $jwt_sign_key,
-    SMALLRYE_JWT_SIGN_KEY_LOCATION: $jwt_sign_key_location
+    SMALLRYE_JWT_SIGN_KEY_LOCATION: $jwt_sign_key_location,
+    OFICINA_AUTH_ISSUER: $oficina_auth_issuer,
+    OFICINA_AUTH_AUDIENCE: $oficina_auth_audience,
+    OFICINA_AUTH_SCOPE: $oficina_auth_scope,
+    OFICINA_AUTH_KEY_ID: $oficina_auth_key_id
   }' > "${desired_env_file}"
 
 if [[ "${function_exists}" == "true" ]]; then

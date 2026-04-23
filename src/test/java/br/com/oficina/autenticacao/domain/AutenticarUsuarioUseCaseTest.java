@@ -15,6 +15,7 @@ import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import io.smallrye.jwt.build.Jwt;
 import io.smallrye.jwt.build.JwtClaimsBuilder;
+import io.smallrye.jwt.build.JwtSignatureBuilder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.mockito.ArgumentCaptor;
@@ -153,11 +154,7 @@ class AutenticarUsuarioUseCaseTest {
         PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
         JwtClaimsBuilder jwtClaimsBuilder = mock(JwtClaimsBuilder.class, Mockito.CALLS_REAL_METHODS);
 
-        when(jwtClaimsBuilder.subject("84191404067")).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.groups(Mockito.anySet())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.issuedAt(anyLong())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.expiresAt(anyLong())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.sign()).thenReturn("signed-token");
+        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder);
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
@@ -169,6 +166,7 @@ class AutenticarUsuarioUseCaseTest {
                     useCase.execute(new AutenticarUsuarioRequest("841.914.040-67", "secret"));
 
             assertEquals("signed-token", response.access_token());
+            verify(jwtSignatureBuilder).keyId("oficina-lab-rsa");
             panacheEntityBaseMock.verify(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067"));
         }
     }
@@ -179,11 +177,7 @@ class AutenticarUsuarioUseCaseTest {
         PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
         JwtClaimsBuilder jwtClaimsBuilder = mock(JwtClaimsBuilder.class, Mockito.CALLS_REAL_METHODS);
 
-        when(jwtClaimsBuilder.subject("84191404067")).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.groups(Mockito.anySet())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.issuedAt(anyLong())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.expiresAt(anyLong())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.sign()).thenReturn("signed-token");
+        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder);
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
@@ -201,10 +195,14 @@ class AutenticarUsuarioUseCaseTest {
             ArgumentCaptor<Long> issuedAtCaptor = ArgumentCaptor.forClass(Long.class);
             ArgumentCaptor<Long> expiresAtCaptor = ArgumentCaptor.forClass(Long.class);
             verify(jwtClaimsBuilder).subject("84191404067");
+            verify(jwtClaimsBuilder).audience("oficina-app");
+            verify(jwtClaimsBuilder).scope("oficina-app");
             verify(jwtClaimsBuilder).groups(Set.of("admin"));
             verify(jwtClaimsBuilder).issuedAt(issuedAtCaptor.capture());
             verify(jwtClaimsBuilder).expiresAt(expiresAtCaptor.capture());
-            verify(jwtClaimsBuilder).sign();
+            verify(jwtClaimsBuilder).jws();
+            verify(jwtSignatureBuilder).keyId("oficina-lab-rsa");
+            verify(jwtSignatureBuilder).sign();
 
             long ttlInSeconds = expiresAtCaptor.getValue() - issuedAtCaptor.getValue();
             assertTrue(ttlInSeconds >= 3600 && ttlInSeconds <= 3601,
@@ -218,11 +216,7 @@ class AutenticarUsuarioUseCaseTest {
         PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
         JwtClaimsBuilder jwtClaimsBuilder = mock(JwtClaimsBuilder.class, Mockito.CALLS_REAL_METHODS);
 
-        when(jwtClaimsBuilder.subject("84191404067")).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.groups(Mockito.anySet())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.issuedAt(anyLong())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.expiresAt(anyLong())).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.sign()).thenReturn("signed-token");
+        stubJwtBuilder(jwtClaimsBuilder);
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
@@ -241,6 +235,21 @@ class AutenticarUsuarioUseCaseTest {
     @SuppressWarnings("unchecked")
     private static PanacheQuery<UsuarioEntity> mockPanacheQuery() {
         return mock(PanacheQuery.class);
+    }
+
+    private static JwtSignatureBuilder stubJwtBuilder(JwtClaimsBuilder jwtClaimsBuilder) {
+        JwtSignatureBuilder jwtSignatureBuilder = mock(JwtSignatureBuilder.class);
+        when(jwtClaimsBuilder.subject("84191404067")).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.audience("oficina-app")).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.scope("oficina-app")).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.groups(Mockito.anySet())).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.issuedAt(anyLong())).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.expiresAt(anyLong())).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.jws()).thenReturn(jwtSignatureBuilder);
+        when(jwtSignatureBuilder.keyId("oficina-lab-rsa")).thenReturn(jwtSignatureBuilder);
+        when(jwtSignatureBuilder.sign()).thenReturn("signed-token");
+        Mockito.clearInvocations(jwtClaimsBuilder, jwtSignatureBuilder);
+        return jwtSignatureBuilder;
     }
 
     private static UsuarioEntity usuario(String documento, String password, String... roles) {

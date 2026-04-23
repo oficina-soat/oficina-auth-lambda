@@ -133,6 +133,10 @@ Rotação é explícita:
 - `ROTATE_JWT_SECRET`: default `false`
 - `JWT_DIR`: default `.tmp/jwt`; usado com `JWT_SECRET_SOURCE=local-files`
 - `REGENERATE_JWT`: default `false`; usado com `JWT_SECRET_SOURCE=local-files`
+- `OFICINA_AUTH_ISSUER`: issuer público dos access tokens; quando ausente e `ATTACH_API_GATEWAY=true`, o deploy usa o endpoint do API Gateway
+- `OFICINA_AUTH_AUDIENCE`: audience dos access tokens. Default `oficina-app`
+- `OFICINA_AUTH_SCOPE`: scope padrão dos access tokens. Default `oficina-app`
+- `OFICINA_AUTH_KEY_ID`: `kid` usado no header JWS e no JWKS. Default `oficina-lab-rsa`
 
 ## Variables do API Gateway
 
@@ -140,10 +144,11 @@ Rotação é explícita:
 - `API_GATEWAY_ID`: ID do HTTP API existente
 - `API_GATEWAY_NAME`: default `<EKS_CLUSTER_NAME>-http-api`
 - `API_GATEWAY_ROUTE_KEY`: default `POST /auth`
+- `API_GATEWAY_ROUTE_KEYS`: route keys separados por `;`; default inclui `POST /auth`, `POST /auth/token`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
 - `API_GATEWAY_PAYLOAD_FORMAT_VERSION`: default `2.0`
 - `API_GATEWAY_TIMEOUT_MILLISECONDS`: default `30000`
 
-Quando `ATTACH_API_GATEWAY=true`, o deploy cria ou atualiza somente a rota informada por `API_GATEWAY_ROUTE_KEY` no gateway existente. Ele não cria nem remove o API Gateway.
+Quando `ATTACH_API_GATEWAY=true`, o deploy cria ou atualiza as rotas informadas por `API_GATEWAY_ROUTE_KEYS` no gateway existente. Ele não cria nem remove o API Gateway. As rotas de autenticação e metadados ficam públicas para permitir login e descoberta JWKS/OIDC antes de existir access token.
 
 ## Redeploy manual
 
