@@ -581,14 +581,14 @@ bootstrap_auth_db_user() {
     --set=auth_db_allow_schema_changes="${AUTH_DB_ALLOW_SCHEMA_CHANGES}" \
     <<'SQL'
 SELECT format(
-  'CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',
+  'CREATE ROLE %I LOGIN PASSWORD %L',
   :'auth_db_user',
   :'auth_db_password'
 )
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'auth_db_user') \gexec
 
 SELECT format(
-  'ALTER ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',
+  'ALTER ROLE %I WITH LOGIN PASSWORD %L',
   :'auth_db_user',
   :'auth_db_password'
 ) \gexec
