@@ -2,14 +2,10 @@ name: CI/CD
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - main
-    types:
-      - closed
   push:
     branches:
       - develop
+      - main
 
 concurrency:
   group: lab-lambda
@@ -19,7 +15,6 @@ jobs:
   detect_lambda_version:
     name: detect-lambda-version
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     permissions:
       contents: read
     outputs:
@@ -37,7 +32,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
 
       - name: Detect Lambda version change
         id: version
@@ -182,22 +176,26 @@ jobs:
     env:
       CURRENT_VERSION: ${{ needs.detect_lambda_version.outputs.current_version }}
       DEPLOY_NEEDED: ${{ needs.detect_lambda_version.outputs.deploy_needed }}
-      DEPLOY_BASE_BRANCH: main
-      DEPLOY_HEAD_BRANCH: develop
       GH_TOKEN: ${{ github.token }}
       RELEASE_EXISTS: ${{ needs.detect_lambda_version.outputs.release_exists }}
       RELEASE_TAG: ${{ needs.detect_lambda_version.outputs.release_tag }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Create or update deploy pull request
         shell: bash
+        env:
+          HEAD_BRANCH: ${{ github.ref_name }}
+          BASE_BRANCH: main
         run: |
-          if [[ "${DEPLOY_BASE_BRANCH}" == "${DEPLOY_HEAD_BRANCH}" ]]; then
-            echo "Branch base e branch origem do PR de deploy nao podem ser iguais: ${DEPLOY_BASE_BRANCH}" >&2
+          if [[ "${BASE_BRANCH}" == "${HEAD_BRANCH}" ]]; then
+            echo "Branch base e branch origem do PR de deploy nao podem ser iguais: ${BASE_BRANCH}" >&2
             exit 1
           fi
 
-          if [[ "${GITHUB_REF_NAME}" != "${DEPLOY_HEAD_BRANCH}" ]]; then
-            echo "Este job so pode criar PR a partir de ${DEPLOY_HEAD_BRANCH}; ref atual: ${GITHUB_REF_NAME}" >&2
+          if [[ "${HEAD_BRANCH}" != "develop" ]]; then
+            echo "Este job so pode criar PR a partir de develop; ref atual: ${HEAD_BRANCH}" >&2
             exit 1
           fi
 
@@ -206,12 +204,10 @@ jobs:
             exit 1
           fi
 
-          gh api "repos/${GITHUB_REPOSITORY}/branches/${DEPLOY_BASE_BRANCH}" >/dev/null
-          gh api "repos/${GITHUB_REPOSITORY}/branches/${DEPLOY_HEAD_BRANCH}" >/dev/null
+          git fetch origin "${BASE_BRANCH}" "${HEAD_BRANCH}"
 
-          ahead_by="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${DEPLOY_BASE_BRANCH}...${DEPLOY_HEAD_BRANCH}" --jq '.ahead_by')"
-          if [[ "${ahead_by}" == "0" ]]; then
-            echo "Nenhum commit em ${DEPLOY_HEAD_BRANCH} para promover para ${DEPLOY_BASE_BRANCH}; PR nao sera criado."
+          if git diff --quiet "origin/${BASE_BRANCH}...origin/${HEAD_BRANCH}" -- .; then
+            echo "Branch ${HEAD_BRANCH} nao possui diferencas de conteudo em relacao a ${BASE_BRANCH}; PR nao sera criado."
             exit 0
           fi
 
@@ -222,8 +218,8 @@ jobs:
               "- Versao: ${CURRENT_VERSION}" \
               "- Release alvo: ${RELEASE_TAG}" \
               "- Release existente: ${RELEASE_EXISTS}" \
-              "- Branch destino: ${DEPLOY_BASE_BRANCH}" \
-              "- Branch origem: ${DEPLOY_HEAD_BRANCH}" \
+              "- Branch destino: ${BASE_BRANCH}" \
+              "- Branch origem: ${HEAD_BRANCH}" \
               "- Commit validado: ${GITHUB_SHA}" \
               "Ao aceitar este PR, o merge em main executa build nativo, release e deploy.")"
           else
@@ -233,45 +229,29 @@ jobs:
               "- Versao: ${CURRENT_VERSION}" \
               "- Release alvo: ${RELEASE_TAG}" \
               "- Release existente: ${RELEASE_EXISTS}" \
-              "- Branch destino: ${DEPLOY_BASE_BRANCH}" \
-              "- Branch origem: ${DEPLOY_HEAD_BRANCH}" \
+              "- Branch destino: ${BASE_BRANCH}" \
+              "- Branch origem: ${HEAD_BRANCH}" \
               "- Commit validado: ${GITHUB_SHA}" \
               "Como a release da versao atual ja existe, o merge em main nao executa novo build nativo, release nem deploy.")"
           fi
 
-          pr_number="$(gh pr list \
-            --repo "${GITHUB_REPOSITORY}" \
-            --base "${DEPLOY_BASE_BRANCH}" \
-            --head "${DEPLOY_HEAD_BRANCH}" \
+          existing_pr_url="$(gh pr list \
+            --base "${BASE_BRANCH}" \
+            --head "${HEAD_BRANCH}" \
             --state open \
-            --json number \
-            --jq '.[0].number // ""')"
+            --json url \
+            --jq '.[0].url // empty')"
 
-          if [[ -z "${pr_number}" ]]; then
-            pr_number="$(gh pr list \
-              --repo "${GITHUB_REPOSITORY}" \
-              --head "${DEPLOY_HEAD_BRANCH}" \
-              --state open \
-              --json number,title \
-              --jq '.[] | select(.title | startswith("Deploy oficina-auth-lambda ") or startswith("Atualiza oficina-auth-lambda ")) | .number' \
-              | head -n 1)"
+          if [[ -n "${existing_pr_url}" ]]; then
+            echo "Pull request ja existente: ${existing_pr_url}"
+            exit 0
           fi
 
-          if [[ -n "${pr_number}" ]]; then
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
-              -f title="${title}" \
-              -f body="${body}" \
-              -f base="${DEPLOY_BASE_BRANCH}" >/dev/null
-            echo "PR de deploy atualizado: #${pr_number}"
-          else
-            pr_number="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/pulls" \
-              -f title="${title}" \
-              -f body="${body}" \
-              -f base="${DEPLOY_BASE_BRANCH}" \
-              -f head="${DEPLOY_HEAD_BRANCH}" \
-              --jq '.number')"
-            echo "PR de deploy criado: #${pr_number}"
-          fi
+          gh pr create \
+            --base "${BASE_BRANCH}" \
+            --head "${HEAD_BRANCH}" \
+            --title "${title}" \
+            --body "${body}"
 
   build_native_lambda:
     name: build-native-lambda
@@ -281,9 +261,8 @@ jobs:
       - integration_tests
     if: >
       always() &&
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main' &&
+      github.event_name == 'push' &&
+      github.ref_name == 'main' &&
       needs.detect_lambda_version.outputs.deploy_needed == 'true' &&
       needs.integration_tests.result == 'skipped'
     permissions:
@@ -303,8 +282,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.base.ref }}
 
       - name: Validate release version
         shell: bash
@@ -405,9 +382,8 @@ jobs:
       - detect_lambda_version
       - build_native_lambda
     if: >
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.base.ref == 'main' &&
+      github.event_name == 'push' &&
+      github.ref_name == 'main' &&
       needs.detect_lambda_version.outputs.deploy_needed == 'true'
     permissions:
       contents: read
@@ -474,8 +450,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.base.ref }}
 
       - name: Download Lambda package
         uses: actions/download-artifact@v7
