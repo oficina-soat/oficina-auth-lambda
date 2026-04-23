@@ -25,4 +25,10 @@ public class UsuarioResource {
     public AutenticarUsuarioResponse autenticar(AutenticarUsuarioRequest request) {
         return autenticarUsuarioUseCase.execute(request);
     }
+
+    @POST
+    @Path("/token")
+    public AutenticarUsuarioResponse token(AutenticarUsuarioRequest request) {
+        return autenticar(request);
+    }
 }

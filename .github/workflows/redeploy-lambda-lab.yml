@@ -152,6 +152,11 @@ jobs:
       API_GATEWAY_ID: ${{ vars.API_GATEWAY_ID }}
       API_GATEWAY_NAME: ${{ vars.API_GATEWAY_NAME || format('{0}-http-api', vars.EKS_CLUSTER_NAME || 'eks-lab') }}
       API_GATEWAY_ROUTE_KEY: ${{ vars.API_GATEWAY_ROUTE_KEY || 'POST /auth' }}
+      API_GATEWAY_ROUTE_KEYS: ${{ vars.API_GATEWAY_ROUTE_KEYS }}
+      OFICINA_AUTH_ISSUER: ${{ vars.OFICINA_AUTH_ISSUER }}
+      OFICINA_AUTH_AUDIENCE: ${{ vars.OFICINA_AUTH_AUDIENCE || 'oficina-app' }}
+      OFICINA_AUTH_SCOPE: ${{ vars.OFICINA_AUTH_SCOPE || 'oficina-app' }}
+      OFICINA_AUTH_KEY_ID: ${{ vars.OFICINA_AUTH_KEY_ID || 'oficina-lab-rsa' }}
       API_GATEWAY_PAYLOAD_FORMAT_VERSION: ${{ vars.API_GATEWAY_PAYLOAD_FORMAT_VERSION || '2.0' }}
       API_GATEWAY_TIMEOUT_MILLISECONDS: ${{ vars.API_GATEWAY_TIMEOUT_MILLISECONDS || '30000' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
