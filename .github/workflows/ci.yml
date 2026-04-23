@@ -382,9 +382,11 @@ jobs:
       - detect_lambda_version
       - build_native_lambda
     if: >
+      always() &&
       github.event_name == 'push' &&
       github.ref_name == 'main' &&
-      needs.detect_lambda_version.outputs.deploy_needed == 'true'
+      needs.detect_lambda_version.outputs.deploy_needed == 'true' &&
+      needs.build_native_lambda.result == 'success'
     permissions:
       contents: read
     environment:
