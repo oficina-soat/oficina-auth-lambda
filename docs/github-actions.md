@@ -11,7 +11,7 @@ Workflows disponíveis:
 ## Gatilho
 
 - `push` em `develop`: verifica se a release da versão atual ainda não existe; quando houver deploy pendente, executa testes unitários e de integração; cria ou atualiza o PR `develop -> main` mesmo quando a release da versão atual já existir
-- `pull_request` fechado e mergeado em `main`: executa build nativo, GitHub Release, armazenamento S3 e deploy quando a release da versão atual ainda não existir
+- `push` em `main`: executa build nativo, GitHub Release, armazenamento S3 e deploy quando a release da versão atual ainda não existir
 - `workflow_dispatch` em `ci.yml`: respeita a branch selecionada; executa testes somente quando a release da versão atual ainda não existir; não executa build nativo, release nem deploy
 - `workflow_dispatch` em `redeploy-lambda-lab.yml`: redeploy manual da release já fechada, somente quando a branch selecionada for `main`
 - `workflow_dispatch` em `cleanup-lambda-lab.yml`: cleanup manual com confirmação `CLEANUP`
@@ -33,7 +33,7 @@ O GitHub Release é a origem oficial da versão fechada da Lambda. Em `main`, qu
 5. armazena esse mesmo pacote no S3, quando o bucket estiver configurado
 6. faz o deploy da Lambda
 
-No fluxo automático com deploy pendente, os testes unitários e de integração rodam antes, no `push` em `develop`, e o PR só é criado ou atualizado se esses testes passarem. Quando a release da versão atual já existe, esses testes ficam pulados e o PR é criado ou atualizado apenas para sincronizar `develop` com `main`. Quando um PR com deploy pendente é aceito, o evento de PR mergeado em `main` começa no build nativo.
+No fluxo automático com deploy pendente, os testes unitários e de integração rodam antes, no `push` em `develop`, e o PR só é criado ou atualizado se esses testes passarem. Quando a release da versão atual já existe, esses testes ficam pulados e o PR é criado ou atualizado apenas para sincronizar `develop` com `main`. Quando um PR com deploy pendente é aceito, o `push` resultante em `main` começa no build nativo.
 
 O PR automático não é aberto para versões `-SNAPSHOT`. Versões em `main` também não podem terminar com `-SNAPSHOT`. Se a versão mudar para uma release que já existe, o workflow falha e exige incremento de versão antes de gerar outro pacote.
 
