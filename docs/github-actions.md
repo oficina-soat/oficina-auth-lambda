@@ -18,7 +18,7 @@ Workflows disponíveis:
 
 Os workflows que alteram a Lambda compartilham o grupo de `concurrency` `lab-lambda`, evitando cleanup e deploy simultâneos.
 
-Quando a release da versão atual já existe, o `ci.yml` não executa testes, build, release nem deploy. Ainda assim, ele cria ou atualiza o PR `develop -> main` para sincronizar commits posteriores sem incremento de `project.version`.
+Quando a release da versão atual já existe, o `ci.yml` não executa testes, build, release nem deploy. Ainda assim, ele cria ou atualiza o PR `develop -> main` para sincronizar commits posteriores sem incremento de `project.version`. O workflow valida explicitamente que a origem é `develop`, o destino é `main` e que existe pelo menos um commit em `develop` pendente de promoção antes de abrir o PR.
 
 Para que a criação automática do PR funcione, o repositório precisa permitir que o `GITHUB_TOKEN` crie pull requests (`Settings -> Actions -> General -> Workflow permissions -> Allow GitHub Actions to create and approve pull requests`).
 
