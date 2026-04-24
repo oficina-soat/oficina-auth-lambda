@@ -10,7 +10,6 @@ import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueReques
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
@@ -33,18 +32,19 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
     private static final int ORDINAL = 275;
 
     private final Map<String, String> environment;
-    private final SecretLoader secretLoader;
+    private final SecretLoader providedSecretLoader;
     private final Map<String, String> secretCache = new ConcurrentHashMap<>();
     private final AtomicReference<Map<String, String>> cachedProperties = new AtomicReference<>();
+    private final AtomicReference<SecretLoader> runtimeSecretLoader = new AtomicReference<>();
 
     @SuppressWarnings("unused")
     public AwsSecretsManagerConfigSource() {
-        this(System.getenv(), new AwsSdkSecretLoader(System.getenv()));
+        this(System.getenv(), null);
     }
 
     AwsSecretsManagerConfigSource(Map<String, String> environment, SecretLoader secretLoader) {
         this.environment = Map.copyOf(environment);
-        this.secretLoader = Objects.requireNonNull(secretLoader, "secretLoader");
+        this.providedSecretLoader = secretLoader;
     }
 
     @Override
@@ -107,11 +107,28 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
             return;
         }
 
-        String secretValue = trimmed(secretCache.computeIfAbsent(secretName, secretLoader::load));
+        String secretValue = trimmed(secretCache.computeIfAbsent(secretName, this::loadSecret));
         if (secretValue == null) {
             throw new IllegalStateException("Secret " + secretName + " nao contem SecretString legivel.");
         }
         properties.put(propertyName, secretValue);
+    }
+
+    private String loadSecret(String secretName) {
+        if (providedSecretLoader != null) {
+            return providedSecretLoader.load(secretName);
+        }
+
+        SecretLoader existing = runtimeSecretLoader.get();
+        if (existing != null) {
+            return existing.load(secretName);
+        }
+
+        SecretLoader created = new AwsSdkSecretLoader(environment);
+        if (runtimeSecretLoader.compareAndSet(null, created)) {
+            return created.load(secretName);
+        }
+        return runtimeSecretLoader.get().load(secretName);
     }
 
     private static boolean hasText(String value) {
