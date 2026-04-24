@@ -6,7 +6,7 @@
 
     <groupId>br.com.oficina</groupId>
     <artifactId>oficina-auth-lambda</artifactId>
-    <version>1.0.9</version>
+    <version>1.0.10</version>
 
     <properties>
         <compiler-plugin.version>3.14.1</compiler-plugin.version>
@@ -14,6 +14,8 @@
         <jacoco-plugin.version>0.8.13</jacoco-plugin.version>
         <maven.compiler.release>25</maven.compiler.release>
         <mockito.version>5.21.0</mockito.version>
+        <quarkiverse.amazon.services.version>3.15.1</quarkiverse.amazon.services.version>
+        <aws.sdk.version>2.41.29</aws.sdk.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
@@ -70,6 +72,16 @@
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-elytron-security-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-secretsmanager</artifactId>
+            <version>${quarkiverse.amazon.services.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+            <version>${aws.sdk.version}</version>
         </dependency>
 
         <dependency>

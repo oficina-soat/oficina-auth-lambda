@@ -78,17 +78,19 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 
 - `LAMBDA_ROLE_ARN`: obrigatório apenas na primeira criação da função
 - `QUARKUS_DATASOURCE_JDBC_URL`: opcional; quando ausente, o deploy monta a URL a partir do RDS
-- `QUARKUS_DATASOURCE_USERNAME` e `QUARKUS_DATASOURCE_PASSWORD`: exigidos somente quando `BOOTSTRAP_AUTH_DB_USER=false`
+- `QUARKUS_DATASOURCE_USERNAME` e `QUARKUS_DATASOURCE_PASSWORD`: exigidos somente quando `BOOTSTRAP_AUTH_DB_USER=false` e a Lambda nao for ler os sub-secrets derivados de `AUTH_DB_SECRET_NAME` em runtime
 - `AUTH_DB_PASSWORD`: opcional; quando ausente, o deploy gera ou reutiliza a senha salva no Secrets Manager
 - `MASTER_DB_PASSWORD`: opcional; normalmente o deploy lê a senha pelo secret master gerenciado pelo RDS
 - `MP_JWT_VERIFY_PUBLICKEY`/`SMALLRYE_JWT_SIGN_KEY`: exigidos somente quando `JWT_SECRET_SOURCE=env-vars`
 
 Por padrão, o deploy não exige secrets manuais para JWT nem para usuário de banco. Ele usa o AWS Secrets Manager:
 
-- `JWT_SECRET_NAME=oficina/lab/jwt`, campos `privateKeyPem` e `publicKeyPem`
-- `AUTH_DB_SECRET_NAME=oficina/lab/database/auth-lambda`, campos `engine`, `host`, `port`, `dbname`, `username` e `password`
+- `JWT_SECRET_NAME=oficina/lab/jwt`, materializando `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`
+- `AUTH_DB_SECRET_NAME=oficina/lab/database/auth-lambda`, materializando `.../engine`, `.../host`, `.../port`, `.../dbname`, `.../username` e `.../password`
 
-Se o secret JWT não existir, o deploy gera um par RSA 2048 bits e salva no Secrets Manager. Se o secret de banco do auth-lambda não existir, o deploy gera a senha, cria/atualiza o role PostgreSQL `AUTH_DB_USER` no RDS e salva a credencial.
+No fluxo padrão, a configuração da Lambda passa a armazenar apenas os identificadores dos sub-secrets e os mappings do `quarkus-amazon-secretsmanager`. As chaves JWT e a senha do banco são lidas em runtime pelo próprio processo da Lambda.
+
+Se os sub-secrets JWT não existirem, o deploy gera um par RSA 2048 bits e salva no Secrets Manager. Se os sub-secrets de banco do auth-lambda nao existirem, o deploy gera a senha, cria/atualiza o role PostgreSQL `AUTH_DB_USER` no RDS e salva a credencial.
 
 Rotação é explícita:
 
@@ -110,7 +112,7 @@ Rotação é explícita:
 - `AUTH_DB_USER`: default `oficina_auth_lambda`
 - `AUTH_DB_ALLOW_SCHEMA_CHANGES`: default `false`; quando `true`, concede `CREATE` no schema `public`
 - `STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER`: default `true`
-- `AUTH_DB_SECRET_NAME`: default `oficina/lab/database/auth-lambda`
+- `AUTH_DB_SECRET_NAME`: default `oficina/lab/database/auth-lambda`; os valores sao gravados em sub-secrets derivados
 - `AUTH_DB_SECRET_KMS_KEY_ID`: KMS key opcional para criação do secret de banco
 - `ROTATE_AUTH_DB_PASSWORD`: default `false`
 - `AUTO_ALLOW_DEPLOY_RUNNER_CIDR`: default `true`; libera temporariamente o IPv4 público do runner no security group do RDS para executar o bootstrap via `psql`
@@ -126,9 +128,9 @@ Rotação é explícita:
 - `LAMBDA_ARTIFACT_BUCKET`: bucket S3 opcional para armazenar o pacote nativo; fallback para `TF_STATE_BUCKET`
 - `LAMBDA_ARTIFACT_PREFIX`: prefixo S3 dos pacotes nativos. Default `oficina/lab/lambda/oficina-auth-lambda`
 - `JWT_SECRET_SOURCE`: default `aws-secrets-manager`; aceita `aws-secrets-manager`, `local-files` ou `env-vars`
-- `JWT_SECRET_NAME`: default `oficina/lab/jwt`
-- `JWT_SECRET_PRIVATE_KEY_FIELD`: default `privateKeyPem`
-- `JWT_SECRET_PUBLIC_KEY_FIELD`: default `publicKeyPem`
+- `JWT_SECRET_NAME`: default `oficina/lab/jwt`; os valores sao gravados em sub-secrets derivados
+- `JWT_SECRET_PRIVATE_KEY_FIELD`: default `privateKeyPem`; vira o sufixo do sub-secret da chave privada
+- `JWT_SECRET_PUBLIC_KEY_FIELD`: default `publicKeyPem`; vira o sufixo do sub-secret da chave publica
 - `JWT_SECRET_KMS_KEY_ID`: KMS key opcional para criação do secret JWT
 - `ROTATE_JWT_SECRET`: default `false`
 - `JWT_DIR`: default `.tmp/jwt`; usado com `JWT_SECRET_SOURCE=local-files`
@@ -199,6 +201,8 @@ As credenciais AWS usadas pelo workflow precisam permitir, além das ações já
 - `secretsmanager:PutSecretValue`
 - `ec2:AuthorizeSecurityGroupIngress`
 - `ec2:RevokeSecurityGroupIngress`
+
+A role de execução da Lambda também precisa de `secretsmanager:GetSecretValue` para os sub-secrets derivados de `JWT_SECRET_NAME` e `AUTH_DB_SECRET_NAME`. Se esses secrets usarem uma KMS key gerenciada pelo cliente, conceda também `kms:Decrypt` nessa chave.
 
 O API Gateway é descoberto por `API_GATEWAY_ID` ou por `API_GATEWAY_NAME`. O default por nome segue `../oficina-infra-k8s`: `<EKS_CLUSTER_NAME>-http-api`.
 

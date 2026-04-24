@@ -206,6 +206,29 @@ require_valid_secret_id() {
   fi
 }
 
+join_secret_path() {
+  local base_name="$1"
+  local suffix="$2"
+
+  require_valid_secret_id "${base_name}" "base_name"
+  require_valid_secret_id "${suffix}" "suffix"
+  printf '%s/%s' "${base_name%/}" "${suffix#/}"
+}
+
+jwt_private_key_secret_name() {
+  join_secret_path "${JWT_SECRET_NAME}" "${JWT_SECRET_PRIVATE_KEY_FIELD}"
+}
+
+jwt_public_key_secret_name() {
+  join_secret_path "${JWT_SECRET_NAME}" "${JWT_SECRET_PUBLIC_KEY_FIELD}"
+}
+
+auth_db_secret_field_name() {
+  local field_name="$1"
+
+  join_secret_path "${AUTH_DB_SECRET_NAME}" "${field_name}"
+}
+
 ensure_jwt_inputs() {
   if [[ -z "${MP_JWT_VERIFY_PUBLICKEY}" && -z "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" ]]; then
     echo "Informe MP_JWT_VERIFY_PUBLICKEY ou MP_JWT_VERIFY_PUBLICKEY_LOCATION." >&2
@@ -255,6 +278,16 @@ read_secret_json() {
     --output text
 }
 
+read_secret_string() {
+  local secret_name="$1"
+
+  require_valid_secret_id "${secret_name}" "secret_name"
+  aws --region "${AWS_REGION}" secretsmanager get-secret-value \
+    --secret-id "${secret_name}" \
+    --query SecretString \
+    --output text
+}
+
 read_secret_field() {
   local secret_json="$1"
   local field_name="$2"
@@ -280,7 +313,8 @@ generate_jwt_keypair() {
 
 create_or_rotate_aws_jwt_secret() {
   local tmp_dir
-  local secret_json_file
+  local private_key_secret_name
+  local public_key_secret_name
 
   require_cmd openssl
   require_non_empty "${JWT_SECRET_NAME}" "JWT_SECRET_NAME"
@@ -288,52 +322,40 @@ create_or_rotate_aws_jwt_secret() {
   require_non_empty "${JWT_SECRET_PUBLIC_KEY_FIELD}" "JWT_SECRET_PUBLIC_KEY_FIELD"
 
   tmp_dir="$(mktemp -d)"
-  secret_json_file="${tmp_dir}/jwt-secret.json"
+  private_key_secret_name="$(jwt_private_key_secret_name)"
+  public_key_secret_name="$(jwt_public_key_secret_name)"
 
   generate_jwt_keypair "${tmp_dir}"
 
-  jq -n \
-    --rawfile privateKeyPem "${tmp_dir}/privateKey.pem" \
-    --rawfile publicKeyPem "${tmp_dir}/publicKey.pem" \
-    --arg privateKeyField "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
-    --arg publicKeyField "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
-    '{($privateKeyField): $privateKeyPem, ($publicKeyField): $publicKeyPem}' \
-    > "${secret_json_file}"
-
-  if secret_exists "${JWT_SECRET_NAME}"; then
-    log "Rotacionando secret JWT no AWS Secrets Manager: ${JWT_SECRET_NAME}"
-    aws --region "${AWS_REGION}" secretsmanager put-secret-value \
-      --secret-id "${JWT_SECRET_NAME}" \
-      --secret-string "file://${secret_json_file}" >/dev/null
+  if secret_exists "${private_key_secret_name}" || secret_exists "${public_key_secret_name}"; then
+    log "Rotacionando secrets JWT no AWS Secrets Manager: ${private_key_secret_name}, ${public_key_secret_name}"
   else
-    log "Criando secret JWT no AWS Secrets Manager: ${JWT_SECRET_NAME}"
-    if [[ -n "${JWT_SECRET_KMS_KEY_ID}" ]]; then
-      aws --region "${AWS_REGION}" secretsmanager create-secret \
-        --name "${JWT_SECRET_NAME}" \
-        --kms-key-id "${JWT_SECRET_KMS_KEY_ID}" \
-        --description "Chaves JWT compartilhadas da Oficina no ambiente lab" \
-        --secret-string "file://${secret_json_file}" >/dev/null
-    else
-      aws --region "${AWS_REGION}" secretsmanager create-secret \
-        --name "${JWT_SECRET_NAME}" \
-        --description "Chaves JWT compartilhadas da Oficina no ambiente lab" \
-        --secret-string "file://${secret_json_file}" >/dev/null
-    fi
+    log "Criando secrets JWT no AWS Secrets Manager: ${private_key_secret_name}, ${public_key_secret_name}"
   fi
+
+  upsert_secret_string "${private_key_secret_name}" "${tmp_dir}/privateKey.pem" "${JWT_SECRET_KMS_KEY_ID}" \
+    "Chave privada JWT compartilhada da Oficina no ambiente lab"
+  upsert_secret_string "${public_key_secret_name}" "${tmp_dir}/publicKey.pem" "${JWT_SECRET_KMS_KEY_ID}" \
+    "Chave publica JWT compartilhada da Oficina no ambiente lab"
 
   rm -rf "${tmp_dir}"
 }
 
 ensure_aws_jwt_secret() {
+  local private_key_secret_name
+  local public_key_secret_name
+
   require_non_empty "${JWT_SECRET_NAME}" "JWT_SECRET_NAME"
+  private_key_secret_name="$(jwt_private_key_secret_name)"
+  public_key_secret_name="$(jwt_public_key_secret_name)"
 
   if [[ "${ROTATE_JWT_SECRET}" == "true" ]]; then
     create_or_rotate_aws_jwt_secret
     return
   fi
 
-  if secret_exists "${JWT_SECRET_NAME}"; then
-    log "Usando secret JWT existente no AWS Secrets Manager: ${JWT_SECRET_NAME}"
+  if secret_exists "${private_key_secret_name}" && secret_exists "${public_key_secret_name}"; then
+    log "Usando secrets JWT existentes no AWS Secrets Manager: ${private_key_secret_name}, ${public_key_secret_name}"
     return
   fi
 
@@ -341,23 +363,29 @@ ensure_aws_jwt_secret() {
 }
 
 load_jwt_from_aws_secret() {
-  local secret_json
+  local private_key_secret_name
+  local public_key_secret_name
 
   ensure_aws_jwt_secret
-  secret_json="$(read_secret_json "${JWT_SECRET_NAME}")"
-  SMALLRYE_JWT_SIGN_KEY="$(jq -er --arg field "${JWT_SECRET_PRIVATE_KEY_FIELD}" '.[$field]' <<<"${secret_json}")"
-  MP_JWT_VERIFY_PUBLICKEY="$(jq -er --arg field "${JWT_SECRET_PUBLIC_KEY_FIELD}" '.[$field]' <<<"${secret_json}")"
+  private_key_secret_name="$(jwt_private_key_secret_name)"
+  public_key_secret_name="$(jwt_public_key_secret_name)"
+  local jwt_private_key
+  local jwt_public_key
+  jwt_private_key="$(read_secret_string "${private_key_secret_name}")"
+  jwt_public_key="$(read_secret_string "${public_key_secret_name}")"
 
-  if ! grep -q "BEGIN PRIVATE KEY" <<<"${SMALLRYE_JWT_SIGN_KEY}"; then
-    echo "Campo ${JWT_SECRET_PRIVATE_KEY_FIELD} do secret ${JWT_SECRET_NAME} nao contem uma chave privada PEM valida." >&2
+  if ! grep -q "BEGIN PRIVATE KEY" <<<"${jwt_private_key}"; then
+    echo "Secret ${private_key_secret_name} nao contem uma chave privada PEM valida." >&2
     exit 1
   fi
 
-  if ! grep -q "BEGIN PUBLIC KEY" <<<"${MP_JWT_VERIFY_PUBLICKEY}"; then
-    echo "Campo ${JWT_SECRET_PUBLIC_KEY_FIELD} do secret ${JWT_SECRET_NAME} nao contem uma chave publica PEM valida." >&2
+  if ! grep -q "BEGIN PUBLIC KEY" <<<"${jwt_public_key}"; then
+    echo "Secret ${public_key_secret_name} nao contem uma chave publica PEM valida." >&2
     exit 1
   fi
 
+  SMALLRYE_JWT_SIGN_KEY=""
+  MP_JWT_VERIFY_PUBLICKEY=""
   SMALLRYE_JWT_SIGN_KEY_LOCATION=""
   MP_JWT_VERIFY_PUBLICKEY_LOCATION=""
 }
@@ -490,29 +518,35 @@ configure_deploy_runner_db_access() {
   done
 }
 
-upsert_auth_db_secret() {
-  local secret_payload="$1"
+upsert_secret_string() {
+  local secret_name="$1"
+  local secret_file="$2"
+  local kms_key_id="$3"
+  local description="$4"
 
-  require_non_empty "${AUTH_DB_SECRET_NAME}" "AUTH_DB_SECRET_NAME"
+  require_non_empty "${secret_name}" "secret_name"
+  require_non_empty "${secret_file}" "secret_file"
 
-  if secret_exists "${AUTH_DB_SECRET_NAME}"; then
+  if secret_exists "${secret_name}"; then
     aws --region "${AWS_REGION}" secretsmanager put-secret-value \
-      --secret-id "${AUTH_DB_SECRET_NAME}" \
-      --secret-string "${secret_payload}" >/dev/null
+      --secret-id "${secret_name}" \
+      --secret-string "file://${secret_file}" >/dev/null
     return
   fi
 
-  if [[ -n "${AUTH_DB_SECRET_KMS_KEY_ID}" ]]; then
+  if [[ -n "${kms_key_id}" ]]; then
     aws --region "${AWS_REGION}" secretsmanager create-secret \
-      --name "${AUTH_DB_SECRET_NAME}" \
-      --kms-key-id "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      --secret-string "${secret_payload}" >/dev/null
+      --name "${secret_name}" \
+      --kms-key-id "${kms_key_id}" \
+      --description "${description}" \
+      --secret-string "file://${secret_file}" >/dev/null
     return
   fi
 
   aws --region "${AWS_REGION}" secretsmanager create-secret \
-    --name "${AUTH_DB_SECRET_NAME}" \
-    --secret-string "${secret_payload}" >/dev/null
+    --name "${secret_name}" \
+    --description "${description}" \
+    --secret-string "file://${secret_file}" >/dev/null
 }
 
 bootstrap_auth_db_user() {
@@ -522,21 +556,33 @@ bootstrap_auth_db_user() {
   local db_master_secret_arn="$1"
   local db_master_username="$2"
   local master_secret_json=""
-  local existing_auth_secret_json=""
   local existing_auth_secret_user=""
   local existing_auth_secret_password=""
-  local secret_payload=""
+  local auth_db_username_secret_name=""
+  local auth_db_password_secret_name=""
+  local auth_db_engine_secret_name=""
+  local auth_db_host_secret_name=""
+  local auth_db_port_secret_name=""
+  local auth_db_name_secret_name=""
+  local secret_tmp_dir=""
 
-  if [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" && "${ROTATE_AUTH_DB_PASSWORD}" != "true" ]] \
-    && secret_exists "${AUTH_DB_SECRET_NAME}"; then
-    existing_auth_secret_json="$(read_secret_json "${AUTH_DB_SECRET_NAME}")"
-    existing_auth_secret_user="$(read_secret_field "${existing_auth_secret_json}" username)"
+  if [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
+    auth_db_username_secret_name="$(auth_db_secret_field_name username)"
+    auth_db_password_secret_name="$(auth_db_secret_field_name password)"
+    auth_db_engine_secret_name="$(auth_db_secret_field_name engine)"
+    auth_db_host_secret_name="$(auth_db_secret_field_name host)"
+    auth_db_port_secret_name="$(auth_db_secret_field_name port)"
+    auth_db_name_secret_name="$(auth_db_secret_field_name dbname)"
+  fi
 
+  if [[ -n "${auth_db_username_secret_name}" && -n "${auth_db_password_secret_name}" && "${ROTATE_AUTH_DB_PASSWORD}" != "true" ]] \
+    && secret_exists "${auth_db_username_secret_name}" && secret_exists "${auth_db_password_secret_name}"; then
+    existing_auth_secret_user="$(read_secret_string "${auth_db_username_secret_name}")"
     if [[ "${existing_auth_secret_user}" == "${AUTH_DB_USER}" && -z "${AUTH_DB_PASSWORD}" ]]; then
-      existing_auth_secret_password="$(read_secret_field "${existing_auth_secret_json}" password)"
+      existing_auth_secret_password="$(read_secret_string "${auth_db_password_secret_name}")"
       if [[ -n "${existing_auth_secret_password}" ]]; then
         AUTH_DB_PASSWORD="${existing_auth_secret_password}"
-        log "Reutilizando senha existente do secret ${AUTH_DB_SECRET_NAME}"
+        log "Reutilizando senha existente do secret ${auth_db_password_secret_name}"
       fi
     fi
   fi
@@ -621,16 +667,28 @@ SQL
   QUARKUS_DATASOURCE_PASSWORD="${AUTH_DB_PASSWORD}"
 
   if [[ "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
-    secret_payload="$(jq -nc \
-      --arg engine "postgres" \
-      --arg host "${db_host}" \
-      --arg dbname "${db_name}" \
-      --arg username "${AUTH_DB_USER}" \
-      --arg password "${AUTH_DB_PASSWORD}" \
-      --arg port "${db_port}" \
-      '{engine: $engine, host: $host, port: $port, dbname: $dbname, username: $username, password: $password}')"
-    upsert_auth_db_secret "${secret_payload}"
-    log "Secret da credencial do auth-lambda criada/atualizada em ${AUTH_DB_SECRET_NAME}"
+    secret_tmp_dir="$(mktemp -d)"
+    printf '%s' "postgres" > "${secret_tmp_dir}/engine"
+    printf '%s' "${db_host}" > "${secret_tmp_dir}/host"
+    printf '%s' "${db_port}" > "${secret_tmp_dir}/port"
+    printf '%s' "${db_name}" > "${secret_tmp_dir}/dbname"
+    printf '%s' "${AUTH_DB_USER}" > "${secret_tmp_dir}/username"
+    printf '%s' "${AUTH_DB_PASSWORD}" > "${secret_tmp_dir}/password"
+
+    upsert_secret_string "${auth_db_engine_secret_name}" "${secret_tmp_dir}/engine" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Engine da credencial do auth-lambda no ambiente lab"
+    upsert_secret_string "${auth_db_host_secret_name}" "${secret_tmp_dir}/host" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Host da credencial do auth-lambda no ambiente lab"
+    upsert_secret_string "${auth_db_port_secret_name}" "${secret_tmp_dir}/port" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Porta da credencial do auth-lambda no ambiente lab"
+    upsert_secret_string "${auth_db_name_secret_name}" "${secret_tmp_dir}/dbname" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Database da credencial do auth-lambda no ambiente lab"
+    upsert_secret_string "${auth_db_username_secret_name}" "${secret_tmp_dir}/username" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Usuario da credencial do auth-lambda no ambiente lab"
+    upsert_secret_string "${auth_db_password_secret_name}" "${secret_tmp_dir}/password" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Senha da credencial do auth-lambda no ambiente lab"
+    rm -rf "${secret_tmp_dir}"
+    log "Secrets da credencial do auth-lambda criados/atualizados sob ${AUTH_DB_SECRET_NAME}/"
   fi
 }
 
@@ -908,24 +966,82 @@ current_env_file="$(mktemp)"
 desired_env_file="$(mktemp)"
 merged_env_file="$(mktemp)"
 
+lambda_datasource_username="${QUARKUS_DATASOURCE_USERNAME}"
+lambda_datasource_password="${QUARKUS_DATASOURCE_PASSWORD}"
+lambda_auth_db_secret_name=""
+lambda_auth_db_username_secret_name=""
+lambda_auth_db_password_secret_name=""
+lambda_jwt_private_key_secret_name=""
+lambda_jwt_public_key_secret_name=""
+lambda_secrets_manager_config_enabled="false"
+
+if [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
+  candidate_auth_db_username_secret_name="$(auth_db_secret_field_name username)"
+  candidate_auth_db_password_secret_name="$(auth_db_secret_field_name password)"
+  if [[ "${BOOTSTRAP_AUTH_DB_USER}" == "true" ]] \
+    || { secret_exists "${candidate_auth_db_username_secret_name}" && secret_exists "${candidate_auth_db_password_secret_name}"; }; then
+    lambda_datasource_username=""
+    lambda_datasource_password=""
+    lambda_auth_db_secret_name="${AUTH_DB_SECRET_NAME}"
+    lambda_auth_db_username_secret_name="${candidate_auth_db_username_secret_name}"
+    lambda_auth_db_password_secret_name="${candidate_auth_db_password_secret_name}"
+    lambda_secrets_manager_config_enabled="true"
+  fi
+fi
+
+lambda_jwt_verify_publickey="${MP_JWT_VERIFY_PUBLICKEY}"
+lambda_jwt_verify_publickey_location="${MP_JWT_VERIFY_PUBLICKEY_LOCATION}"
+lambda_jwt_sign_key="${SMALLRYE_JWT_SIGN_KEY}"
+lambda_jwt_sign_key_location="${SMALLRYE_JWT_SIGN_KEY_LOCATION}"
+
+if [[ "${JWT_SECRET_SOURCE}" == "aws-secrets-manager" ]]; then
+  lambda_jwt_verify_publickey=""
+  lambda_jwt_verify_publickey_location=""
+  lambda_jwt_sign_key=""
+  lambda_jwt_sign_key_location=""
+  lambda_jwt_private_key_secret_name="$(jwt_private_key_secret_name)"
+  lambda_jwt_public_key_secret_name="$(jwt_public_key_secret_name)"
+  lambda_secrets_manager_config_enabled="true"
+fi
+
 jq -n \
   --arg disable_signal_handlers "true" \
-  --arg datasource_username "${QUARKUS_DATASOURCE_USERNAME}" \
-  --arg datasource_password "${QUARKUS_DATASOURCE_PASSWORD}" \
+  --arg secrets_manager_config_enabled "${lambda_secrets_manager_config_enabled}" \
+  --arg datasource_username "${lambda_datasource_username}" \
+  --arg datasource_password "${lambda_datasource_password}" \
   --arg datasource_jdbc_url "${QUARKUS_DATASOURCE_JDBC_URL}" \
-  --arg jwt_verify_publickey "${MP_JWT_VERIFY_PUBLICKEY}" \
-  --arg jwt_verify_publickey_location "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" \
-  --arg jwt_sign_key "${SMALLRYE_JWT_SIGN_KEY}" \
-  --arg jwt_sign_key_location "${SMALLRYE_JWT_SIGN_KEY_LOCATION}" \
+  --arg auth_db_secret_name "${lambda_auth_db_secret_name}" \
+  --arg auth_db_username_secret_name "${lambda_auth_db_username_secret_name}" \
+  --arg auth_db_password_secret_name "${lambda_auth_db_password_secret_name}" \
+  --arg jwt_secret_source "${JWT_SECRET_SOURCE}" \
+  --arg jwt_secret_name "${JWT_SECRET_NAME}" \
+  --arg jwt_secret_private_key_field "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
+  --arg jwt_secret_public_key_field "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
+  --arg jwt_private_key_secret_name "${lambda_jwt_private_key_secret_name}" \
+  --arg jwt_public_key_secret_name "${lambda_jwt_public_key_secret_name}" \
+  --arg jwt_verify_publickey "${lambda_jwt_verify_publickey}" \
+  --arg jwt_verify_publickey_location "${lambda_jwt_verify_publickey_location}" \
+  --arg jwt_sign_key "${lambda_jwt_sign_key}" \
+  --arg jwt_sign_key_location "${lambda_jwt_sign_key_location}" \
   --arg oficina_auth_issuer "${OFICINA_AUTH_ISSUER}" \
   --arg oficina_auth_audience "${OFICINA_AUTH_AUDIENCE}" \
   --arg oficina_auth_scope "${OFICINA_AUTH_SCOPE}" \
   --arg oficina_auth_key_id "${OFICINA_AUTH_KEY_ID}" \
   '{
     DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+    SECRETS_MANAGER_CONFIG_ENABLED: $secrets_manager_config_enabled,
     QUARKUS_DATASOURCE_USERNAME: $datasource_username,
     QUARKUS_DATASOURCE_PASSWORD: $datasource_password,
     QUARKUS_DATASOURCE_JDBC_URL: $datasource_jdbc_url,
+    AUTH_DB_SECRET_NAME: $auth_db_secret_name,
+    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_: $auth_db_username_secret_name,
+    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_: $auth_db_password_secret_name,
+    JWT_SECRET_SOURCE: $jwt_secret_source,
+    JWT_SECRET_NAME: $jwt_secret_name,
+    JWT_SECRET_PRIVATE_KEY_FIELD: $jwt_secret_private_key_field,
+    JWT_SECRET_PUBLIC_KEY_FIELD: $jwt_secret_public_key_field,
+    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_: $jwt_private_key_secret_name,
+    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_: $jwt_public_key_secret_name,
     MP_JWT_VERIFY_PUBLICKEY: $jwt_verify_publickey,
     MP_JWT_VERIFY_PUBLICKEY_LOCATION: $jwt_verify_publickey_location,
     SMALLRYE_JWT_SIGN_KEY: $jwt_sign_key,

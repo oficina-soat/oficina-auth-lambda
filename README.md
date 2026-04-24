@@ -168,15 +168,15 @@ O deploy:
 - descobre endpoint, porta e security groups do RDS
 - cria ou reutiliza o security group dedicado da Lambda
 - autoriza o security group da Lambda no RDS
-- cria ou reutiliza o secret JWT `oficina/lab/jwt`; se ele não existir, gera um par RSA 2048 bits
-- cria ou atualiza o usuário PostgreSQL próprio `oficina_auth_lambda`; se a senha ainda não existir, gera e salva em `oficina/lab/database/auth-lambda`
-- cria ou atualiza a função Lambda com `VpcConfig` e variáveis do Quarkus
+- cria ou reutiliza os secrets JWT `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`; se eles não existirem, gera um par RSA 2048 bits
+- cria ou atualiza o usuário PostgreSQL próprio `oficina_auth_lambda`; se a senha ainda não existir, gera e salva sub-secrets sob `oficina/lab/database/auth-lambda/`
+- cria ou atualiza a função Lambda com `VpcConfig` e variáveis do Quarkus, mantendo na configuração apenas os nomes dos sub-secrets quando o modo padrão do Secrets Manager está ativo
 - cria ou atualiza a rota `POST /auth` no HTTP API Gateway existente
 - adiciona permissão para o API Gateway invocar a Lambda
 
-Por padrão, o deploy usa o mesmo secret JWT do `../oficina-app` (`JWT_SECRET_NAME=oficina/lab/jwt`), com os campos `privateKeyPem` e `publicKeyPem`. Assim, os tokens emitidos pelo auth-lambda continuam compatíveis com a aplicação. Para rotacionar explicitamente o par JWT, use `ROTATE_JWT_SECRET=true`; tokens assinados com a chave anterior deixam de validar depois que os consumidores forem atualizados.
+Por padrão, o deploy usa o prefixo `JWT_SECRET_NAME=oficina/lab/jwt` e materializa os sub-secrets `privateKeyPem` e `publicKeyPem`, resultando em `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`. Assim, os tokens emitidos pelo auth-lambda continuam compatíveis com a aplicação, mas a Lambda recebe apenas os nomes dos sub-secrets e resolve tudo em runtime via AWS Secrets Manager. Para rotacionar explicitamente o par JWT, use `ROTATE_JWT_SECRET=true`; tokens assinados com a chave anterior deixam de validar depois que os consumidores forem atualizados.
 
-O usuário do banco é separado do usuário da aplicação principal. O deploy descobre o secret master gerenciado pelo RDS, libera temporariamente o IPv4 público do runner no security group do RDS quando `AUTO_ALLOW_DEPLOY_RUNNER_CIDR=true`, executa o bootstrap via `psql`, remove a regra temporária ao sair e injeta as credenciais geradas nas variáveis da Lambda. Para voltar ao modo antigo, configure `BOOTSTRAP_AUTH_DB_USER=false` e informe `QUARKUS_DATASOURCE_USERNAME`/`QUARKUS_DATASOURCE_PASSWORD`.
+O usuário do banco é separado do usuário da aplicação principal. O deploy descobre o secret master gerenciado pelo RDS, libera temporariamente o IPv4 público do runner no security group do RDS quando `AUTO_ALLOW_DEPLOY_RUNNER_CIDR=true`, executa o bootstrap via `psql`, remove a regra temporária ao sair e mantém na Lambda apenas os mappings para sub-secrets sob `AUTH_DB_SECRET_NAME`, de onde usuário e senha são lidos em runtime. Para voltar ao modo antigo, configure `BOOTSTRAP_AUTH_DB_USER=false` e informe `QUARKUS_DATASOURCE_USERNAME`/`QUARKUS_DATASOURCE_PASSWORD`.
 
 Detalhes de variáveis, secrets e workflows auxiliares: [docs/github-actions.md](docs/github-actions.md).
 
