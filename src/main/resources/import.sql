@@ -3,7 +3,7 @@ INSERT INTO pessoa (id, documento) VALUES
     (2, '36655462007'),
     (3, '17245011010');
 
-INSERT INTO papel (id, papel) VALUES
+INSERT INTO papel (id, nome) VALUES
     (1, 'administrativo'),
     (2, 'mecanico'),
     (3, 'recepcionista');

@@ -1,0 +1,35 @@
+# Maven Wrapper
+prefix_rule(pattern = ["./mvnw", "-version"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "test"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "verify"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "package"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "clean"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "clean", "test"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "clean", "verify"], decision = "allow")
+
+# Quarkus
+prefix_rule(pattern = ["./mvnw", "quarkus:dev"], decision = "allow")
+prefix_rule(pattern = ["./mvnw", "quarkus:test"], decision = "allow")
+
+# Scripts locais de validacao e build
+prefix_rule(pattern = ["./scripts/generate-dev-jwt-keys.sh"], decision = "allow")
+prefix_rule(pattern = ["bash", "-n", "scripts/generate-dev-jwt-keys.sh"], decision = "allow")
+prefix_rule(pattern = ["bash", "-n", "scripts/build-native-lambda.sh"], decision = "allow")
+prefix_rule(pattern = ["bash", "-n", "scripts/deploy-native-lambda.sh"], decision = "allow")
+prefix_rule(pattern = ["bash", "-n", "scripts/cleanup-lambda.sh"], decision = "allow")
+prefix_rule(pattern = ["bash", "-n", "scripts/s3-native-lambda-artifact.sh"], decision = "allow")
+prefix_rule(pattern = ["./scripts/build-native-lambda.sh"], decision = "allow")
+
+# Git
+prefix_rule(pattern = ["git", "status"], decision = "allow")
+prefix_rule(pattern = ["git", "add"], decision = "allow")
+prefix_rule(pattern = ["git", "commit", "-m"], decision = "allow")
+
+# Docker e Podman diagnostico
+prefix_rule(pattern = ["docker", "ps"], decision = "allow")
+prefix_rule(pattern = ["docker", "images"], decision = "allow")
+prefix_rule(pattern = ["podman", "ps"], decision = "allow")
+prefix_rule(pattern = ["podman", "images"], decision = "allow")
+
+# AWS validacao
+prefix_rule(pattern = ["aws", "sts", "get-caller-identity"], decision = "allow")

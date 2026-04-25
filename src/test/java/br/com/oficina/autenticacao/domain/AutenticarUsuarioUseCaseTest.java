@@ -326,7 +326,7 @@ class AutenticarUsuarioUseCaseTest {
         usuario.status = status;
         for (String role : roles) {
             PapelEntity papel = new PapelEntity();
-            papel.papel = role;
+            papel.nome = role;
             usuario.papelEntities.add(papel);
         }
         return usuario;
