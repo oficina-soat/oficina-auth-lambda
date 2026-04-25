@@ -232,21 +232,81 @@ class AutenticarUsuarioUseCaseTest {
         }
     }
 
+    @Test
+    void shouldTrimTrailingSlashFromConfiguredIssuerBeforeSigningJwt() {
+        UsuarioEntity usuario = usuario("84191404067", BcryptUtil.bcryptHash("secret"), "admin");
+        PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
+        JwtClaimsBuilder jwtClaimsBuilder = mock(JwtClaimsBuilder.class, Mockito.CALLS_REAL_METHODS);
+
+        useCase.issuer = "https://auth.oficina.example.com/";
+
+        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder, "oficina-app", "oficina-app",
+                "oficina-lab-rsa");
+
+        try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
+             MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
+            panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
+            jwtMock.when(() -> Jwt.issuer("https://auth.oficina.example.com")).thenReturn(jwtClaimsBuilder);
+
+            AutenticarUsuarioResponse response =
+                    useCase.execute(new AutenticarUsuarioRequest("84191404067", "secret"));
+
+            assertEquals("signed-token", response.access_token());
+            verify(jwtSignatureBuilder).keyId("oficina-lab-rsa");
+        }
+    }
+
+    @Test
+    void shouldUseConfiguredAudienceScopeAndKeyId() {
+        UsuarioEntity usuario = usuario("84191404067", BcryptUtil.bcryptHash("secret"), "admin");
+        PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
+        JwtClaimsBuilder jwtClaimsBuilder = mock(JwtClaimsBuilder.class, Mockito.CALLS_REAL_METHODS);
+
+        useCase.issuer = "https://auth.oficina.example.com";
+        useCase.audience = "oficina-backoffice";
+        useCase.scope = "oficina-backoffice.read";
+        useCase.keyId = "oficina-prod-rsa";
+
+        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder, "oficina-backoffice",
+                "oficina-backoffice.read", "oficina-prod-rsa");
+
+        try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
+             MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
+            panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
+            jwtMock.when(() -> Jwt.issuer("https://auth.oficina.example.com")).thenReturn(jwtClaimsBuilder);
+
+            AutenticarUsuarioResponse response =
+                    useCase.execute(new AutenticarUsuarioRequest("84191404067", "secret"));
+
+            assertEquals("signed-token", response.access_token());
+            verify(jwtClaimsBuilder).audience("oficina-backoffice");
+            verify(jwtClaimsBuilder).scope("oficina-backoffice.read");
+            verify(jwtSignatureBuilder).keyId("oficina-prod-rsa");
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static PanacheQuery<UsuarioEntity> mockPanacheQuery() {
         return mock(PanacheQuery.class);
     }
 
     private static JwtSignatureBuilder stubJwtBuilder(JwtClaimsBuilder jwtClaimsBuilder) {
+        return stubJwtBuilder(jwtClaimsBuilder, "oficina-app", "oficina-app", "oficina-lab-rsa");
+    }
+
+    private static JwtSignatureBuilder stubJwtBuilder(JwtClaimsBuilder jwtClaimsBuilder, String audience, String scope,
+                                                      String keyId) {
         JwtSignatureBuilder jwtSignatureBuilder = mock(JwtSignatureBuilder.class);
         when(jwtClaimsBuilder.subject("84191404067")).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.audience("oficina-app")).thenReturn(jwtClaimsBuilder);
-        when(jwtClaimsBuilder.scope("oficina-app")).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.audience(audience)).thenReturn(jwtClaimsBuilder);
+        when(jwtClaimsBuilder.scope(scope)).thenReturn(jwtClaimsBuilder);
         when(jwtClaimsBuilder.groups(Mockito.anySet())).thenReturn(jwtClaimsBuilder);
         when(jwtClaimsBuilder.issuedAt(anyLong())).thenReturn(jwtClaimsBuilder);
         when(jwtClaimsBuilder.expiresAt(anyLong())).thenReturn(jwtClaimsBuilder);
         when(jwtClaimsBuilder.jws()).thenReturn(jwtSignatureBuilder);
-        when(jwtSignatureBuilder.keyId("oficina-lab-rsa")).thenReturn(jwtSignatureBuilder);
+        when(jwtSignatureBuilder.keyId(keyId)).thenReturn(jwtSignatureBuilder);
         when(jwtSignatureBuilder.sign()).thenReturn("signed-token");
         Mockito.clearInvocations(jwtClaimsBuilder, jwtSignatureBuilder);
         return jwtSignatureBuilder;
