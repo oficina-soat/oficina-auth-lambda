@@ -101,7 +101,7 @@ class AutenticarUsuarioUseCaseIT {
     private static void persistUsuario(String documento, String password, UsuarioStatus status, String... papeis) {
         PessoaEntity pessoa = new PessoaEntity();
         pessoa.documento = documento;
-        List<PapelEntity> papelEntities = PapelEntity.list("papel in ?1", List.of(papeis));
+        List<PapelEntity> papelEntities = PapelEntity.list("nome in ?1", List.of(papeis));
 
         if (papelEntities.size() != papeis.length) {
             throw new IllegalStateException("Nem todos os papeis esperados foram encontrados");

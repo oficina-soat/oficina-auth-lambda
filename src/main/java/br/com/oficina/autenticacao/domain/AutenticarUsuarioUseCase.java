@@ -68,7 +68,7 @@ public class AutenticarUsuarioUseCase {
             var now = Instant.now();
             String normalizedIssuer = normalizeIssuer(configured(issuer, DEFAULT_ISSUER));
             Set<String> grupos = usuarioEntity.papelEntities.stream()
-                    .map(papelEntity -> papelEntity.papel)
+                    .map(papelEntity -> papelEntity.nome)
                     .collect(Collectors.toSet());
 
             String accessToken = timing.jwt(() -> Jwt.issuer(normalizedIssuer)
