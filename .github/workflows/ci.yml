@@ -441,6 +441,7 @@ jobs:
       MP_JWT_VERIFY_PUBLICKEY_LOCATION: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY_LOCATION }}
       SMALLRYE_JWT_SIGN_KEY: ${{ secrets.SMALLRYE_JWT_SIGN_KEY }}
       SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
+      LAMBDA_SECRET_INJECTION_MODE: ${{ vars.LAMBDA_SECRET_INJECTION_MODE || 'env-vars' }}
       JWT_SECRET_SOURCE: ${{ vars.JWT_SECRET_SOURCE || 'aws-secrets-manager' }}
       JWT_SECRET_NAME: ${{ vars.JWT_SECRET_NAME || 'oficina/lab/jwt' }}
       JWT_SECRET_PRIVATE_KEY_FIELD: ${{ vars.JWT_SECRET_PRIVATE_KEY_FIELD || 'privateKeyPem' }}
@@ -467,11 +468,6 @@ jobs:
           [[ -n "${LAMBDA_FUNCTION_NAME}" ]] || missing+=("LAMBDA_FUNCTION_NAME")
           [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${API_GATEWAY_ID}" || -n "${API_GATEWAY_NAME}" ]] || missing+=("API_GATEWAY_ID|API_GATEWAY_NAME")
           [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${API_GATEWAY_ROUTE_KEY}" ]] || missing+=("API_GATEWAY_ROUTE_KEY")
-
-          if [[ "${BOOTSTRAP_AUTH_DB_USER}" != "true" ]]; then
-            [[ -n "${QUARKUS_DATASOURCE_USERNAME}" ]] || missing+=("QUARKUS_DATASOURCE_USERNAME")
-            [[ -n "${QUARKUS_DATASOURCE_PASSWORD}" ]] || missing+=("QUARKUS_DATASOURCE_PASSWORD")
-          fi
 
           if [[ "${JWT_SECRET_SOURCE}" == "env-vars" && -z "${MP_JWT_VERIFY_PUBLICKEY}" && -z "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" ]]; then
             missing+=("MP_JWT_VERIFY_PUBLICKEY|MP_JWT_VERIFY_PUBLICKEY_LOCATION")

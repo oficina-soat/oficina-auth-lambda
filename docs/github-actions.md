@@ -78,17 +78,19 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 
 - `LAMBDA_ROLE_ARN`: obrigatório apenas na primeira criação da função
 - `QUARKUS_DATASOURCE_JDBC_URL`: opcional; quando ausente, o deploy monta a URL a partir do RDS
-- `QUARKUS_DATASOURCE_USERNAME` e `QUARKUS_DATASOURCE_PASSWORD`: exigidos somente quando `BOOTSTRAP_AUTH_DB_USER=false` e a Lambda nao for ler os sub-secrets derivados de `AUTH_DB_SECRET_NAME` em runtime
+- `QUARKUS_DATASOURCE_USERNAME` e `QUARKUS_DATASOURCE_PASSWORD`: exigidos somente quando `BOOTSTRAP_AUTH_DB_USER=false`, `LAMBDA_SECRET_INJECTION_MODE=env-vars` e o deploy tambem nao conseguir ler os sub-secrets derivados de `AUTH_DB_SECRET_NAME`
 - `AUTH_DB_PASSWORD`: opcional; quando ausente, o deploy gera ou reutiliza a senha salva no Secrets Manager
 - `MASTER_DB_PASSWORD`: opcional; normalmente o deploy lê a senha pelo secret master gerenciado pelo RDS
 - `MP_JWT_VERIFY_PUBLICKEY`/`SMALLRYE_JWT_SIGN_KEY`: exigidos somente quando `JWT_SECRET_SOURCE=env-vars`
 
-Por padrão, o deploy não exige secrets manuais para JWT nem para usuário de banco. Ele usa o AWS Secrets Manager:
+Por padrão, o deploy não exige secrets manuais para JWT nem para usuário de banco. Ele usa o AWS Secrets Manager como origem durante o deploy:
 
 - `JWT_SECRET_NAME=oficina/lab/jwt`, materializando `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`
 - `AUTH_DB_SECRET_NAME=oficina/lab/database/auth-lambda`, materializando `.../engine`, `.../host`, `.../port`, `.../dbname`, `.../username` e `.../password`
 
-No fluxo padrão, a configuração da Lambda passa a armazenar apenas os identificadores dos sub-secrets e os mappings do `quarkus-amazon-secretsmanager`. As chaves JWT e a senha do banco são lidas em runtime pelo próprio processo da Lambda.
+No fluxo padrão deste repo, `LAMBDA_SECRET_INJECTION_MODE=env-vars`, entao o deploy resolve as chaves JWT e a credencial do banco antes de publicar a funcao e grava os valores diretamente nas env vars da Lambda. Isso evita NAT Gateway ou VPC Endpoint dedicado so para ler Secrets Manager no startup, reduzindo custo recorrente no laboratorio.
+
+Quando precisar manter a leitura em runtime pelo proprio processo da Lambda, configure `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`. Nesse modo, a configuracao da Lambda passa a armazenar apenas os identificadores dos sub-secrets e os mappings do `quarkus-amazon-secretsmanager`.
 
 Se os sub-secrets JWT não existirem, o deploy gera um par RSA 2048 bits e salva no Secrets Manager. Se os sub-secrets de banco do auth-lambda nao existirem, o deploy gera a senha, cria/atualiza o role PostgreSQL `AUTH_DB_USER` no RDS e salva a credencial.
 
@@ -135,6 +137,7 @@ Rotação é explícita:
 - `ROTATE_JWT_SECRET`: default `false`
 - `JWT_DIR`: default `.tmp/jwt`; usado com `JWT_SECRET_SOURCE=local-files`
 - `REGENERATE_JWT`: default `false`; usado com `JWT_SECRET_SOURCE=local-files`
+- `LAMBDA_SECRET_INJECTION_MODE`: default `env-vars`; aceita `env-vars` ou `runtime-secrets-manager`
 - `OFICINA_AUTH_ISSUER`: issuer público dos access tokens; quando ausente e `ATTACH_API_GATEWAY=true`, o deploy usa o endpoint do API Gateway
 - `OFICINA_AUTH_AUDIENCE`: audience dos access tokens. Default `oficina-app`
 - `OFICINA_AUTH_SCOPE`: scope padrão dos access tokens. Default `oficina-app`
@@ -202,7 +205,7 @@ As credenciais AWS usadas pelo workflow precisam permitir, além das ações já
 - `ec2:AuthorizeSecurityGroupIngress`
 - `ec2:RevokeSecurityGroupIngress`
 
-A role de execução da Lambda também precisa de `secretsmanager:GetSecretValue` para os sub-secrets derivados de `JWT_SECRET_NAME` e `AUTH_DB_SECRET_NAME`. Se esses secrets usarem uma KMS key gerenciada pelo cliente, conceda também `kms:Decrypt` nessa chave.
+A role de execução da Lambda só precisa de `secretsmanager:GetSecretValue` para os sub-secrets derivados de `JWT_SECRET_NAME` e `AUTH_DB_SECRET_NAME` quando `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`. Se esses secrets usarem uma KMS key gerenciada pelo cliente, conceda também `kms:Decrypt` nessa chave.
 
 O API Gateway é descoberto por `API_GATEWAY_ID` ou por `API_GATEWAY_NAME`. O default por nome segue `../oficina-infra-k8s`: `<EKS_CLUSTER_NAME>-http-api`.
 
