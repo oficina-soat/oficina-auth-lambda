@@ -48,6 +48,7 @@ JWT_SECRET_KMS_KEY_ID="${JWT_SECRET_KMS_KEY_ID:-}"
 ROTATE_JWT_SECRET="${ROTATE_JWT_SECRET:-false}"
 JWT_DIR="${JWT_DIR:-.tmp/jwt}"
 REGENERATE_JWT="${REGENERATE_JWT:-false}"
+LAMBDA_SECRET_INJECTION_MODE="${LAMBDA_SECRET_INJECTION_MODE:-env-vars}"
 OFICINA_AUTH_ISSUER="${OFICINA_AUTH_ISSUER:-}"
 OFICINA_AUTH_AUDIENCE="${OFICINA_AUTH_AUDIENCE:-oficina-app}"
 OFICINA_AUTH_SCOPE="${OFICINA_AUTH_SCOPE:-oficina-app}"
@@ -120,6 +121,7 @@ Variaveis opcionais:
   ROTATE_JWT_SECRET            Gera novo par JWT no Secrets Manager. Default: false
   JWT_DIR                      Diretorio de chaves para JWT_SECRET_SOURCE=local-files
   REGENERATE_JWT               Regenera chaves locais. Default: false
+  LAMBDA_SECRET_INJECTION_MODE env-vars|runtime-secrets-manager. Default: env-vars
   OFICINA_AUTH_ISSUER          Issuer publico dos access tokens. Default: endpoint do API Gateway quando anexado
   OFICINA_AUTH_AUDIENCE        Audience dos access tokens. Default: oficina-app
   OFICINA_AUTH_SCOPE           Scope padrao dos access tokens. Default: oficina-app
@@ -239,6 +241,17 @@ ensure_jwt_inputs() {
     echo "Informe SMALLRYE_JWT_SIGN_KEY ou SMALLRYE_JWT_SIGN_KEY_LOCATION." >&2
     exit 1
   fi
+}
+
+require_valid_lambda_secret_injection_mode() {
+  case "${LAMBDA_SECRET_INJECTION_MODE}" in
+    env-vars|runtime-secrets-manager)
+      ;;
+    *)
+      echo "LAMBDA_SECRET_INJECTION_MODE invalido: ${LAMBDA_SECRET_INJECTION_MODE}. Use env-vars ou runtime-secrets-manager." >&2
+      exit 1
+      ;;
+  esac
 }
 
 aws_json() {
@@ -382,6 +395,14 @@ load_jwt_from_aws_secret() {
   if ! grep -q "BEGIN PUBLIC KEY" <<<"${jwt_public_key}"; then
     echo "Secret ${public_key_secret_name} nao contem uma chave publica PEM valida." >&2
     exit 1
+  fi
+
+  if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "env-vars" ]]; then
+    SMALLRYE_JWT_SIGN_KEY="${jwt_private_key}"
+    MP_JWT_VERIFY_PUBLICKEY="${jwt_public_key}"
+    SMALLRYE_JWT_SIGN_KEY_LOCATION=""
+    MP_JWT_VERIFY_PUBLICKEY_LOCATION=""
+    return
   fi
 
   SMALLRYE_JWT_SIGN_KEY=""
@@ -692,6 +713,30 @@ SQL
   fi
 }
 
+load_auth_db_credentials_from_secret() {
+  local auth_db_username_secret_name
+  local auth_db_password_secret_name
+
+  if [[ -z "${AUTH_DB_SECRET_NAME}" || "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" != "true" ]]; then
+    return
+  fi
+
+  auth_db_username_secret_name="$(auth_db_secret_field_name username)"
+  auth_db_password_secret_name="$(auth_db_secret_field_name password)"
+
+  if [[ -z "${QUARKUS_DATASOURCE_USERNAME}" ]]; then
+    if secret_exists "${auth_db_username_secret_name}"; then
+      QUARKUS_DATASOURCE_USERNAME="$(read_secret_string "${auth_db_username_secret_name}")"
+    fi
+  fi
+
+  if [[ -z "${QUARKUS_DATASOURCE_PASSWORD}" ]]; then
+    if secret_exists "${auth_db_password_secret_name}"; then
+      QUARKUS_DATASOURCE_PASSWORD="$(read_secret_string "${auth_db_password_secret_name}")"
+    fi
+  fi
+}
+
 ensure_auth_db_credentials() {
   local db_master_secret_arn="$1"
   local db_master_username="$2"
@@ -701,6 +746,7 @@ ensure_auth_db_credentials() {
     return
   fi
 
+  load_auth_db_credentials_from_secret
   require_non_empty "${QUARKUS_DATASOURCE_USERNAME}" "QUARKUS_DATASOURCE_USERNAME"
   require_non_empty "${QUARKUS_DATASOURCE_PASSWORD}" "QUARKUS_DATASOURCE_PASSWORD"
 }
@@ -868,6 +914,7 @@ require_cmd jq
 require_cmd md5sum
 require_non_empty "${AWS_REGION}" "AWS_REGION"
 require_non_empty "${LAMBDA_FUNCTION_NAME}" "LAMBDA_FUNCTION_NAME"
+require_valid_lambda_secret_injection_mode
 
 if [[ ! -f "${ARTIFACT_PATH}" ]]; then
   echo "Artefato nao encontrado em ${ARTIFACT_PATH}" >&2
@@ -975,7 +1022,8 @@ lambda_jwt_private_key_secret_name=""
 lambda_jwt_public_key_secret_name=""
 lambda_secrets_manager_config_enabled="false"
 
-if [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
+if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] \
+  && [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
   candidate_auth_db_username_secret_name="$(auth_db_secret_field_name username)"
   candidate_auth_db_password_secret_name="$(auth_db_secret_field_name password)"
   if [[ "${BOOTSTRAP_AUTH_DB_USER}" == "true" ]] \
@@ -994,7 +1042,7 @@ lambda_jwt_verify_publickey_location="${MP_JWT_VERIFY_PUBLICKEY_LOCATION}"
 lambda_jwt_sign_key="${SMALLRYE_JWT_SIGN_KEY}"
 lambda_jwt_sign_key_location="${SMALLRYE_JWT_SIGN_KEY_LOCATION}"
 
-if [[ "${JWT_SECRET_SOURCE}" == "aws-secrets-manager" ]]; then
+if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] && [[ "${JWT_SECRET_SOURCE}" == "aws-secrets-manager" ]]; then
   lambda_jwt_verify_publickey=""
   lambda_jwt_verify_publickey_location=""
   lambda_jwt_sign_key=""
