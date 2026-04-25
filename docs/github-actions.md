@@ -85,14 +85,14 @@ Como o laboratório costuma recriar as credenciais a cada sessão, atualize esse
 
 Por padrão, o deploy não exige secrets manuais para JWT nem para usuário de banco. Ele usa o AWS Secrets Manager como origem durante o deploy:
 
-- `JWT_SECRET_NAME=oficina/lab/jwt`, materializando `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`
+- `JWT_SECRET_NAME=oficina/lab/jwt`, como um secret JSON único com os campos `privateKeyPem` e `publicKeyPem`
 - `AUTH_DB_SECRET_NAME=oficina/lab/database/auth-lambda`, materializando `.../engine`, `.../host`, `.../port`, `.../dbname`, `.../username` e `.../password`
 
 No fluxo padrão deste repo, `LAMBDA_SECRET_INJECTION_MODE=env-vars`, entao o deploy resolve as chaves JWT e a credencial do banco antes de publicar a funcao e grava os valores diretamente nas env vars da Lambda. Isso evita NAT Gateway ou VPC Endpoint dedicado so para ler Secrets Manager no startup, reduzindo custo recorrente no laboratorio.
 
-Quando precisar manter a leitura em runtime pelo proprio processo da Lambda, configure `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`. Nesse modo, a configuracao da Lambda passa a armazenar apenas os identificadores dos sub-secrets e os mappings do `quarkus-amazon-secretsmanager`.
+Quando precisar manter a leitura em runtime pelo proprio processo da Lambda, configure `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`. Nesse modo, a configuracao da Lambda passa a armazenar o identificador do secret JSON compartilhado de JWT e os mappings do `quarkus-amazon-secretsmanager`, extraindo `privateKeyPem` e `publicKeyPem` em runtime.
 
-Se os sub-secrets JWT não existirem, o deploy gera um par RSA 2048 bits e salva no Secrets Manager. Se os sub-secrets de banco do auth-lambda nao existirem, o deploy gera a senha, cria/atualiza o role PostgreSQL `AUTH_DB_USER` no RDS e salva a credencial.
+Se o secret JWT ainda nao existir, o deploy gera um par RSA 2048 bits e salva no Secrets Manager. Se encontrar apenas o formato legado em `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`, o deploy migra automaticamente para o secret compartilhado `oficina/lab/jwt`. Se os sub-secrets de banco do auth-lambda nao existirem, o deploy gera a senha, cria/atualiza o role PostgreSQL `AUTH_DB_USER` no RDS e salva a credencial.
 
 Rotação é explícita:
 
@@ -130,9 +130,9 @@ Rotação é explícita:
 - `LAMBDA_ARTIFACT_BUCKET`: bucket S3 opcional para armazenar o pacote nativo; fallback para `TF_STATE_BUCKET`
 - `LAMBDA_ARTIFACT_PREFIX`: prefixo S3 dos pacotes nativos. Default `oficina/lab/lambda/oficina-auth-lambda`
 - `JWT_SECRET_SOURCE`: default `aws-secrets-manager`; aceita `aws-secrets-manager`, `local-files` ou `env-vars`
-- `JWT_SECRET_NAME`: default `oficina/lab/jwt`; os valores sao gravados em sub-secrets derivados
-- `JWT_SECRET_PRIVATE_KEY_FIELD`: default `privateKeyPem`; vira o sufixo do sub-secret da chave privada
-- `JWT_SECRET_PUBLIC_KEY_FIELD`: default `publicKeyPem`; vira o sufixo do sub-secret da chave publica
+- `JWT_SECRET_NAME`: default `oficina/lab/jwt`; secret JSON compartilhado com os campos configurados abaixo
+- `JWT_SECRET_PRIVATE_KEY_FIELD`: default `privateKeyPem`; nome do campo da chave privada dentro do secret JWT
+- `JWT_SECRET_PUBLIC_KEY_FIELD`: default `publicKeyPem`; nome do campo da chave publica dentro do secret JWT
 - `JWT_SECRET_KMS_KEY_ID`: KMS key opcional para criação do secret JWT
 - `ROTATE_JWT_SECRET`: default `false`
 - `JWT_DIR`: default `.tmp/jwt`; usado com `JWT_SECRET_SOURCE=local-files`
@@ -205,7 +205,7 @@ As credenciais AWS usadas pelo workflow precisam permitir, além das ações já
 - `ec2:AuthorizeSecurityGroupIngress`
 - `ec2:RevokeSecurityGroupIngress`
 
-A role de execução da Lambda só precisa de `secretsmanager:GetSecretValue` para os sub-secrets derivados de `JWT_SECRET_NAME` e `AUTH_DB_SECRET_NAME` quando `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`. Se esses secrets usarem uma KMS key gerenciada pelo cliente, conceda também `kms:Decrypt` nessa chave.
+A role de execução da Lambda só precisa de `secretsmanager:GetSecretValue` para o secret JWT `JWT_SECRET_NAME` e para os sub-secrets derivados de `AUTH_DB_SECRET_NAME` quando `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`. Se esses secrets usarem uma KMS key gerenciada pelo cliente, conceda também `kms:Decrypt` nessa chave.
 
 O API Gateway é descoberto por `API_GATEWAY_ID` ou por `API_GATEWAY_NAME`. O default por nome segue `../oficina-infra-k8s`: `<EKS_CLUSTER_NAME>-http-api`.
 

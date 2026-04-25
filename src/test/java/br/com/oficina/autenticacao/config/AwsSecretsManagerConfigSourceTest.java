@@ -32,6 +32,28 @@ class AwsSecretsManagerConfigSourceTest {
     }
 
     @Test
+    void shouldResolveJwtPemFieldsFromSharedJsonSecret() {
+        AwsSecretsManagerConfigSource configSource = new AwsSecretsManagerConfigSource(
+                Map.of(
+                        "JWT_SECRET_PRIVATE_KEY_FIELD", "privateKeyPem",
+                        "JWT_SECRET_PUBLIC_KEY_FIELD", "publicKeyPem",
+                        "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_", "jwt/shared",
+                        "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_", "jwt/shared"),
+                secretName -> {
+                    assertEquals("jwt/shared", secretName);
+                    return """
+                            {
+                              "privateKeyPem": "-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----",
+                              "publicKeyPem": "-----BEGIN PUBLIC KEY-----\\nxyz\\n-----END PUBLIC KEY-----"
+                            }
+                            """;
+                });
+
+        assertEquals("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", configSource.getValue("smallrye.jwt.sign.key"));
+        assertEquals("-----BEGIN PUBLIC KEY-----\nxyz\n-----END PUBLIC KEY-----", configSource.getValue("mp.jwt.verify.publickey"));
+    }
+
+    @Test
     void shouldNotOverrideDirectEnvironmentValues() {
         AwsSecretsManagerConfigSource configSource = new AwsSecretsManagerConfigSource(
                 Map.of(

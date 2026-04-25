@@ -21,6 +21,8 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
     private static final String JWT_VERIFY_PUBLIC_KEY_LOCATION_ENV = "MP_JWT_VERIFY_PUBLICKEY_LOCATION";
     private static final String JWT_SIGN_KEY_ENV = "SMALLRYE_JWT_SIGN_KEY";
     private static final String JWT_SIGN_KEY_LOCATION_ENV = "SMALLRYE_JWT_SIGN_KEY_LOCATION";
+    private static final String JWT_PRIVATE_KEY_FIELD_ENV = "JWT_SECRET_PRIVATE_KEY_FIELD";
+    private static final String JWT_PUBLIC_KEY_FIELD_ENV = "JWT_SECRET_PUBLIC_KEY_FIELD";
     private static final String DATASOURCE_USERNAME_SECRET_ENV = "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_";
     private static final String DATASOURCE_PASSWORD_SECRET_ENV = "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_";
     private static final String JWT_SIGN_KEY_SECRET_ENV = "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_";
@@ -29,6 +31,8 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
     private static final String DATASOURCE_PASSWORD_PROPERTY = "quarkus.datasource.password";
     private static final String JWT_VERIFY_PUBLIC_KEY_PROPERTY = "mp.jwt.verify.publickey";
     private static final String JWT_SIGN_KEY_PROPERTY = "smallrye.jwt.sign.key";
+    private static final String DEFAULT_JWT_PRIVATE_KEY_FIELD = "privateKeyPem";
+    private static final String DEFAULT_JWT_PUBLIC_KEY_FIELD = "publicKeyPem";
     private static final int ORDINAL = 275;
 
     private final Map<String, String> environment;
@@ -111,6 +115,7 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
         if (secretValue == null) {
             throw new IllegalStateException("Secret " + secretName + " nao contem SecretString legivel.");
         }
+        secretValue = resolveJwtPemFromJson(propertyName, secretValue);
         properties.put(propertyName, secretValue);
     }
 
@@ -133,6 +138,83 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
 
     private static boolean hasText(String value) {
         return trimmed(value) != null;
+    }
+
+    private String resolveJwtPemFromJson(String propertyName, String secretValue) {
+        String fieldName = switch (propertyName) {
+            case JWT_SIGN_KEY_PROPERTY -> configuredField(JWT_PRIVATE_KEY_FIELD_ENV, DEFAULT_JWT_PRIVATE_KEY_FIELD);
+            case JWT_VERIFY_PUBLIC_KEY_PROPERTY -> configuredField(JWT_PUBLIC_KEY_FIELD_ENV, DEFAULT_JWT_PUBLIC_KEY_FIELD);
+            default -> null;
+        };
+        if (fieldName == null || !looksLikeJsonObject(secretValue)) {
+            return secretValue;
+        }
+
+        String extracted = extractJsonStringValue(secretValue, fieldName);
+        return extracted == null ? secretValue : extracted;
+    }
+
+    private String configuredField(String envName, String fallback) {
+        String value = trimmed(environment.get(envName));
+        return value == null ? fallback : value;
+    }
+
+    private static boolean looksLikeJsonObject(String value) {
+        String trimmed = trimmed(value);
+        return trimmed != null && trimmed.startsWith("{") && trimmed.endsWith("}");
+    }
+
+    private static String extractJsonStringValue(String json, String fieldName) {
+        String quotedField = "\"" + fieldName + "\"";
+        int keyIndex = json.indexOf(quotedField);
+        if (keyIndex < 0) {
+            return null;
+        }
+
+        int colonIndex = json.indexOf(':', keyIndex + quotedField.length());
+        if (colonIndex < 0) {
+            return null;
+        }
+
+        int valueStart = colonIndex + 1;
+        while (valueStart < json.length() && Character.isWhitespace(json.charAt(valueStart))) {
+            valueStart++;
+        }
+        if (valueStart >= json.length() || json.charAt(valueStart) != '"') {
+            return null;
+        }
+
+        StringBuilder builder = new StringBuilder();
+        boolean escaping = false;
+        for (int i = valueStart + 1; i < json.length(); i++) {
+            char current = json.charAt(i);
+            if (escaping) {
+                builder.append(unescapeJsonChar(current));
+                escaping = false;
+                continue;
+            }
+            if (current == '\\') {
+                escaping = true;
+                continue;
+            }
+            if (current == '"') {
+                return builder.toString();
+            }
+            builder.append(current);
+        }
+        return null;
+    }
+
+    private static char unescapeJsonChar(char value) {
+        return switch (value) {
+            case '"', '\\', '/' -> value;
+            case 'b' -> '\b';
+            case 'f' -> '\f';
+            case 'n' -> '\n';
+            case 'r' -> '\r';
+            case 't' -> '\t';
+            default -> value;
+        };
     }
 
     private static String trimmed(String value) {
