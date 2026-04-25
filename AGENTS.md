@@ -2,17 +2,17 @@
 
 ## Contexto
 
-Este repositório implementa a Lambda de autenticação da Oficina com Quarkus, publicada como runtime nativo na AWS Lambda e exposta via HTTP API Gateway.
+Este repositório implementa a Lambda da Oficina para autenticação e notificações com Quarkus, publicada como runtime nativo na AWS Lambda e exposta via HTTP API Gateway.
 
 Stack atual do projeto:
 
 - Java 25
 - Quarkus 3.x
 - Maven Wrapper (`./mvnw`)
-- Quarkus REST, Panache, SmallRye JWT e Amazon Lambda HTTP
+- Quarkus REST, Panache, Mailer, SmallRye JWT e Amazon Lambda HTTP
 - PostgreSQL em produção e H2 nos testes
 
-O código principal está concentrado em `src/main/java/br/com/oficina/autenticacao`, com testes em `src/test/java/br/com/oficina/autenticacao` e scripts operacionais em `scripts/`.
+O código principal está concentrado em `src/main/java/br/com/oficina/autenticacao` e `src/main/java/br/com/oficina/notificacao`, com testes em `src/test/java/br/com/oficina` e scripts operacionais em `scripts/`.
 
 Este repositório faz parte de uma suíte maior. Assuma que, quando presentes na mesma raiz deste diretório, os repositórios irmãos relevantes são:
 

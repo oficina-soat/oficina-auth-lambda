@@ -1,10 +1,11 @@
 # oficina-auth-lambda
 
-Lambda standalone de autenticação da Oficina, publicada em runtime nativo do Quarkus e exposta pelo HTTP API Gateway do laboratório.
+Lambda standalone da Oficina para autenticação e notificações, publicada em runtime nativo do Quarkus e exposta pelo HTTP API Gateway do laboratório.
 
 O projeto isola o fluxo de autenticação que antes ficava acoplado ao monólito:
 
 - endpoint HTTP para autenticar usuário por CPF e senha
+- endpoint HTTP para envio serverless de notificações por e-mail
 - integração com PostgreSQL/RDS privado do ambiente `oficina-infra-db`
 - publicação por HTTP API Gateway do ambiente `oficina-infra-k8s`
 - emissão de JWT com SmallRye JWT
@@ -70,6 +71,12 @@ Quando publicado pelo API Gateway, o endpoint padrão é:
 POST /auth
 ```
 
+O mesmo runtime também expõe o endpoint de notificação:
+
+```text
+POST /notificacoes/email
+```
+
 Entrada:
 
 ```json
@@ -90,6 +97,16 @@ Resposta de sucesso:
 ```
 
 O endpoint é implementado com Quarkus REST e publicado na Lambda pela extensão `quarkus-amazon-lambda-http`, compatível com HTTP API Gateway payload format `2.0`.
+
+Entrada de notificação:
+
+```json
+{
+  "emailDestino": "cliente@oficina.com",
+  "assunto": "Orçamento da Ordem de Serviço 11111111-1111-1111-1111-111111111111",
+  "conteudo": "Mensagem"
+}
+```
 
 ## Desenvolvimento local
 
@@ -171,7 +188,7 @@ O deploy:
 - cria ou reutiliza o secret JWT `oficina/lab/jwt`; se ele não existir, gera um par RSA 2048 bits com os campos `privateKeyPem` e `publicKeyPem`
 - cria ou atualiza o usuário PostgreSQL próprio `oficina_auth_lambda`; se a senha ainda não existir, gera e salva sub-secrets sob `oficina/lab/database/auth-lambda/`
 - cria ou atualiza a função Lambda com `VpcConfig` e variáveis do Quarkus, injetando os valores sensíveis no deploy por padrão para evitar dependência de rede com o Secrets Manager no startup
-- cria ou atualiza a rota `POST /auth` no HTTP API Gateway existente
+- cria ou atualiza as rotas `POST /auth`, `POST /auth/token`, `POST /notificacoes/email` e os endpoints de descoberta no HTTP API Gateway existente
 - adiciona permissão para o API Gateway invocar a Lambda
 
 Por padrão, o deploy usa `JWT_SECRET_NAME=oficina/lab/jwt` como um secret JSON único, com os campos `privateKeyPem` e `publicKeyPem`, no mesmo formato esperado por `../oficina-app` e `../oficina-infra-k8s`. No modo default `LAMBDA_SECRET_INJECTION_MODE=env-vars`, o deploy le esse secret e grava as chaves diretamente nas env vars da Lambda, evitando NAT Gateway ou VPC Endpoint dedicado so para startup. Se encontrar apenas o formato legado em sub-secrets `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`, o deploy migra automaticamente para o secret compartilhado antes de publicar a funcao. Para rotacionar explicitamente o par JWT, use `ROTATE_JWT_SECRET=true`; tokens assinados com a chave anterior deixam de validar depois que os consumidores forem atualizados.

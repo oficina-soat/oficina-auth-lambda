@@ -149,11 +149,11 @@ Rotação é explícita:
 - `API_GATEWAY_ID`: ID do HTTP API existente
 - `API_GATEWAY_NAME`: default `<EKS_CLUSTER_NAME>-http-api`
 - `API_GATEWAY_ROUTE_KEY`: default `POST /auth`
-- `API_GATEWAY_ROUTE_KEYS`: route keys separados por `;`; default inclui `POST /auth`, `POST /auth/token`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
+- `API_GATEWAY_ROUTE_KEYS`: route keys separados por `;`; default inclui `POST /auth`, `POST /auth/token`, `POST /notificacoes/email`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
 - `API_GATEWAY_PAYLOAD_FORMAT_VERSION`: default `2.0`
 - `API_GATEWAY_TIMEOUT_MILLISECONDS`: default `30000`
 
-Quando `ATTACH_API_GATEWAY=true`, o deploy cria ou atualiza as rotas informadas por `API_GATEWAY_ROUTE_KEYS` no gateway existente. Ele não cria nem remove o API Gateway. As rotas de autenticação e metadados ficam públicas para permitir login e descoberta JWKS/OIDC antes de existir access token.
+Quando `ATTACH_API_GATEWAY=true`, o deploy cria ou atualiza as rotas informadas por `API_GATEWAY_ROUTE_KEYS` no gateway existente. Ele não cria nem remove o API Gateway. As rotas de autenticação, notificação e metadados passam a apontar para o mesmo runtime da Lambda.
 
 ## Redeploy manual
 

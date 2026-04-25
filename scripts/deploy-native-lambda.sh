@@ -57,7 +57,7 @@ ATTACH_API_GATEWAY="${ATTACH_API_GATEWAY:-true}"
 API_GATEWAY_ID="${API_GATEWAY_ID:-}"
 API_GATEWAY_NAME="${API_GATEWAY_NAME:-${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}}"
 API_GATEWAY_ROUTE_KEY="${API_GATEWAY_ROUTE_KEY:-POST /auth}"
-API_GATEWAY_ROUTE_KEYS="${API_GATEWAY_ROUTE_KEYS:-${API_GATEWAY_ROUTE_KEY};POST /auth/token;GET /.well-known/openid-configuration;GET /.well-known/jwks.json}"
+API_GATEWAY_ROUTE_KEYS="${API_GATEWAY_ROUTE_KEYS:-${API_GATEWAY_ROUTE_KEY};POST /auth/token;POST /notificacoes/email;GET /.well-known/openid-configuration;GET /.well-known/jwks.json}"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
 
@@ -130,7 +130,7 @@ Variaveis opcionais:
   API_GATEWAY_ID               ID do HTTP API existente
   API_GATEWAY_NAME             Nome do HTTP API existente. Default: <EKS_CLUSTER_NAME>-http-api
   API_GATEWAY_ROUTE_KEY        Route key. Default: POST /auth
-  API_GATEWAY_ROUTE_KEYS       Route keys separados por ';'. Default inclui POST /auth, POST /auth/token e JWKS
+  API_GATEWAY_ROUTE_KEYS       Route keys separados por ';'. Default inclui POST /auth, POST /auth/token, POST /notificacoes/email e JWKS
   API_GATEWAY_PAYLOAD_FORMAT_VERSION Default: 2.0
   API_GATEWAY_TIMEOUT_MILLISECONDS   Default: 30000
 EOF
