@@ -21,7 +21,7 @@ O projeto isola o fluxo de autenticação que antes ficava acoplado ao monólito
 - liberação do security group da Lambda no security group do RDS
 - criação/atualização do usuário PostgreSQL exclusivo da Lambda no RDS
 - secret `oficina/lab/database/auth-lambda` com a credencial do usuário da Lambda
-- secret `oficina/lab/jwt` com o par de chaves JWT compartilhado com `../oficina-app`
+- secret `oficina/lab/jwt` com JSON contendo `privateKeyPem` e `publicKeyPem`, compartilhado com `../oficina-app`
 - rota `AWS_PROXY` no HTTP API Gateway existente, quando `ATTACH_API_GATEWAY=true`
 - log group da Lambda no cleanup manual
 
@@ -168,13 +168,13 @@ O deploy:
 - descobre endpoint, porta e security groups do RDS
 - cria ou reutiliza o security group dedicado da Lambda
 - autoriza o security group da Lambda no RDS
-- cria ou reutiliza os secrets JWT `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`; se eles não existirem, gera um par RSA 2048 bits
+- cria ou reutiliza o secret JWT `oficina/lab/jwt`; se ele não existir, gera um par RSA 2048 bits com os campos `privateKeyPem` e `publicKeyPem`
 - cria ou atualiza o usuário PostgreSQL próprio `oficina_auth_lambda`; se a senha ainda não existir, gera e salva sub-secrets sob `oficina/lab/database/auth-lambda/`
 - cria ou atualiza a função Lambda com `VpcConfig` e variáveis do Quarkus, injetando os valores sensíveis no deploy por padrão para evitar dependência de rede com o Secrets Manager no startup
 - cria ou atualiza a rota `POST /auth` no HTTP API Gateway existente
 - adiciona permissão para o API Gateway invocar a Lambda
 
-Por padrão, o deploy usa o prefixo `JWT_SECRET_NAME=oficina/lab/jwt` e materializa os sub-secrets `privateKeyPem` e `publicKeyPem`, resultando em `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`. No modo default `LAMBDA_SECRET_INJECTION_MODE=env-vars`, o deploy le esses secrets e grava as chaves diretamente nas env vars da Lambda, evitando NAT Gateway ou VPC Endpoint dedicado so para startup. Para rotacionar explicitamente o par JWT, use `ROTATE_JWT_SECRET=true`; tokens assinados com a chave anterior deixam de validar depois que os consumidores forem atualizados.
+Por padrão, o deploy usa `JWT_SECRET_NAME=oficina/lab/jwt` como um secret JSON único, com os campos `privateKeyPem` e `publicKeyPem`, no mesmo formato esperado por `../oficina-app` e `../oficina-infra-k8s`. No modo default `LAMBDA_SECRET_INJECTION_MODE=env-vars`, o deploy le esse secret e grava as chaves diretamente nas env vars da Lambda, evitando NAT Gateway ou VPC Endpoint dedicado so para startup. Se encontrar apenas o formato legado em sub-secrets `oficina/lab/jwt/privateKeyPem` e `oficina/lab/jwt/publicKeyPem`, o deploy migra automaticamente para o secret compartilhado antes de publicar a funcao. Para rotacionar explicitamente o par JWT, use `ROTATE_JWT_SECRET=true`; tokens assinados com a chave anterior deixam de validar depois que os consumidores forem atualizados.
 
 O usuário do banco é separado do usuário da aplicação principal. O deploy descobre o secret master gerenciado pelo RDS, libera temporariamente o IPv4 público do runner no security group do RDS quando `AUTO_ALLOW_DEPLOY_RUNNER_CIDR=true`, executa o bootstrap via `psql`, remove a regra temporária ao sair e injeta `QUARKUS_DATASOURCE_USERNAME`/`QUARKUS_DATASOURCE_PASSWORD` diretamente na Lambda por padrão. Para manter o comportamento antigo com leitura em runtime via AWS Secrets Manager, configure `LAMBDA_SECRET_INJECTION_MODE=runtime-secrets-manager`.
 

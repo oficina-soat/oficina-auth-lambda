@@ -226,11 +226,11 @@ join_secret_path() {
   printf '%s/%s' "${base_name%/}" "${suffix#/}"
 }
 
-jwt_private_key_secret_name() {
+jwt_legacy_private_key_secret_name() {
   join_secret_path "${JWT_SECRET_NAME}" "${JWT_SECRET_PRIVATE_KEY_FIELD}"
 }
 
-jwt_public_key_secret_name() {
+jwt_legacy_public_key_secret_name() {
   join_secret_path "${JWT_SECRET_NAME}" "${JWT_SECRET_PUBLIC_KEY_FIELD}"
 }
 
@@ -335,49 +335,80 @@ generate_jwt_keypair() {
 
 create_or_rotate_aws_jwt_secret() {
   local tmp_dir
-  local private_key_secret_name
-  local public_key_secret_name
+  local secret_json_file
 
   require_cmd openssl
+  require_cmd jq
   require_non_empty "${JWT_SECRET_NAME}" "JWT_SECRET_NAME"
   require_non_empty "${JWT_SECRET_PRIVATE_KEY_FIELD}" "JWT_SECRET_PRIVATE_KEY_FIELD"
   require_non_empty "${JWT_SECRET_PUBLIC_KEY_FIELD}" "JWT_SECRET_PUBLIC_KEY_FIELD"
 
   tmp_dir="$(mktemp -d)"
-  private_key_secret_name="$(jwt_private_key_secret_name)"
-  public_key_secret_name="$(jwt_public_key_secret_name)"
+  secret_json_file="${tmp_dir}/jwt-secret.json"
 
   generate_jwt_keypair "${tmp_dir}"
 
-  if secret_exists "${private_key_secret_name}" || secret_exists "${public_key_secret_name}"; then
-    log "Rotacionando secrets JWT no AWS Secrets Manager: ${private_key_secret_name}, ${public_key_secret_name}"
+  jq -n \
+    --rawfile privateKeyPem "${tmp_dir}/privateKey.pem" \
+    --rawfile publicKeyPem "${tmp_dir}/publicKey.pem" \
+    --arg privateKeyField "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
+    --arg publicKeyField "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
+    '{($privateKeyField): $privateKeyPem, ($publicKeyField): $publicKeyPem}' \
+    > "${secret_json_file}"
+
+  if secret_exists "${JWT_SECRET_NAME}"; then
+    log "Rotacionando secret JWT no AWS Secrets Manager: ${JWT_SECRET_NAME}"
   else
-    log "Criando secrets JWT no AWS Secrets Manager: ${private_key_secret_name}, ${public_key_secret_name}"
+    log "Criando secret JWT no AWS Secrets Manager: ${JWT_SECRET_NAME}"
   fi
 
-  upsert_secret_string "${private_key_secret_name}" "${tmp_dir}/privateKey.pem" "${JWT_SECRET_KMS_KEY_ID}" \
-    "Chave privada JWT compartilhada da Oficina no ambiente lab"
-  upsert_secret_string "${public_key_secret_name}" "${tmp_dir}/publicKey.pem" "${JWT_SECRET_KMS_KEY_ID}" \
-    "Chave publica JWT compartilhada da Oficina no ambiente lab"
+  upsert_secret_string "${JWT_SECRET_NAME}" "${secret_json_file}" "${JWT_SECRET_KMS_KEY_ID}" \
+    "Chaves JWT compartilhadas da Oficina no ambiente lab"
 
   rm -rf "${tmp_dir}"
 }
 
 ensure_aws_jwt_secret() {
-  local private_key_secret_name
-  local public_key_secret_name
+  local legacy_private_key_secret_name
+  local legacy_public_key_secret_name
+  local tmp_dir
+  local secret_json_file
+  local jwt_private_key
+  local jwt_public_key
 
   require_non_empty "${JWT_SECRET_NAME}" "JWT_SECRET_NAME"
-  private_key_secret_name="$(jwt_private_key_secret_name)"
-  public_key_secret_name="$(jwt_public_key_secret_name)"
+  legacy_private_key_secret_name="$(jwt_legacy_private_key_secret_name)"
+  legacy_public_key_secret_name="$(jwt_legacy_public_key_secret_name)"
 
   if [[ "${ROTATE_JWT_SECRET}" == "true" ]]; then
     create_or_rotate_aws_jwt_secret
     return
   fi
 
-  if secret_exists "${private_key_secret_name}" && secret_exists "${public_key_secret_name}"; then
-    log "Usando secrets JWT existentes no AWS Secrets Manager: ${private_key_secret_name}, ${public_key_secret_name}"
+  if secret_exists "${JWT_SECRET_NAME}"; then
+    log "Usando secret JWT existente no AWS Secrets Manager: ${JWT_SECRET_NAME}"
+    return
+  fi
+
+  if secret_exists "${legacy_private_key_secret_name}" && secret_exists "${legacy_public_key_secret_name}"; then
+    require_cmd jq
+    tmp_dir="$(mktemp -d)"
+    secret_json_file="${tmp_dir}/jwt-secret.json"
+    jwt_private_key="$(read_secret_string "${legacy_private_key_secret_name}")"
+    jwt_public_key="$(read_secret_string "${legacy_public_key_secret_name}")"
+
+    jq -n \
+      --arg privateKeyField "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
+      --arg publicKeyField "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
+      --arg privateKeyPem "${jwt_private_key}" \
+      --arg publicKeyPem "${jwt_public_key}" \
+      '{($privateKeyField): $privateKeyPem, ($publicKeyField): $publicKeyPem}' \
+      > "${secret_json_file}"
+
+    log "Migrando legacy JWT sub-secrets para o secret compartilhado ${JWT_SECRET_NAME}"
+    upsert_secret_string "${JWT_SECRET_NAME}" "${secret_json_file}" "${JWT_SECRET_KMS_KEY_ID}" \
+      "Chaves JWT compartilhadas da Oficina no ambiente lab"
+    rm -rf "${tmp_dir}"
     return
   fi
 
@@ -385,24 +416,22 @@ ensure_aws_jwt_secret() {
 }
 
 load_jwt_from_aws_secret() {
-  local private_key_secret_name
-  local public_key_secret_name
-
   ensure_aws_jwt_secret
-  private_key_secret_name="$(jwt_private_key_secret_name)"
-  public_key_secret_name="$(jwt_public_key_secret_name)"
+  require_cmd jq
+  local jwt_secret_json
   local jwt_private_key
   local jwt_public_key
-  jwt_private_key="$(read_secret_string "${private_key_secret_name}")"
-  jwt_public_key="$(read_secret_string "${public_key_secret_name}")"
+  jwt_secret_json="$(read_secret_json "${JWT_SECRET_NAME}")"
+  jwt_private_key="$(read_secret_field "${jwt_secret_json}" "${JWT_SECRET_PRIVATE_KEY_FIELD}")"
+  jwt_public_key="$(read_secret_field "${jwt_secret_json}" "${JWT_SECRET_PUBLIC_KEY_FIELD}")"
 
   if ! grep -q "BEGIN PRIVATE KEY" <<<"${jwt_private_key}"; then
-    echo "Secret ${private_key_secret_name} nao contem uma chave privada PEM valida." >&2
+    echo "Campo ${JWT_SECRET_PRIVATE_KEY_FIELD} do secret ${JWT_SECRET_NAME} nao contem uma chave privada PEM valida." >&2
     exit 1
   fi
 
   if ! grep -q "BEGIN PUBLIC KEY" <<<"${jwt_public_key}"; then
-    echo "Secret ${public_key_secret_name} nao contem uma chave publica PEM valida." >&2
+    echo "Campo ${JWT_SECRET_PUBLIC_KEY_FIELD} do secret ${JWT_SECRET_NAME} nao contem uma chave publica PEM valida." >&2
     exit 1
   fi
 
@@ -1029,8 +1058,7 @@ lambda_datasource_password="${QUARKUS_DATASOURCE_PASSWORD}"
 lambda_auth_db_secret_name=""
 lambda_auth_db_username_secret_name=""
 lambda_auth_db_password_secret_name=""
-lambda_jwt_private_key_secret_name=""
-lambda_jwt_public_key_secret_name=""
+lambda_jwt_secret_name=""
 lambda_secrets_manager_config_enabled="false"
 
 if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] \
@@ -1058,8 +1086,7 @@ if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] && [[ "$
   lambda_jwt_verify_publickey_location=""
   lambda_jwt_sign_key=""
   lambda_jwt_sign_key_location=""
-  lambda_jwt_private_key_secret_name="$(jwt_private_key_secret_name)"
-  lambda_jwt_public_key_secret_name="$(jwt_public_key_secret_name)"
+  lambda_jwt_secret_name="${JWT_SECRET_NAME}"
   lambda_secrets_manager_config_enabled="true"
 fi
 
@@ -1076,8 +1103,7 @@ jq -n \
   --arg jwt_secret_name "${JWT_SECRET_NAME}" \
   --arg jwt_secret_private_key_field "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
   --arg jwt_secret_public_key_field "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
-  --arg jwt_private_key_secret_name "${lambda_jwt_private_key_secret_name}" \
-  --arg jwt_public_key_secret_name "${lambda_jwt_public_key_secret_name}" \
+  --arg jwt_secret_json_name "${lambda_jwt_secret_name}" \
   --arg jwt_verify_publickey "${lambda_jwt_verify_publickey}" \
   --arg jwt_verify_publickey_location "${lambda_jwt_verify_publickey_location}" \
   --arg jwt_sign_key "${lambda_jwt_sign_key}" \
@@ -1099,8 +1125,8 @@ jq -n \
     JWT_SECRET_NAME: $jwt_secret_name,
     JWT_SECRET_PRIVATE_KEY_FIELD: $jwt_secret_private_key_field,
     JWT_SECRET_PUBLIC_KEY_FIELD: $jwt_secret_public_key_field,
-    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_: $jwt_private_key_secret_name,
-    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_: $jwt_public_key_secret_name,
+    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_: $jwt_secret_json_name,
+    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_: $jwt_secret_json_name,
     MP_JWT_VERIFY_PUBLICKEY: $jwt_verify_publickey,
     MP_JWT_VERIFY_PUBLICKEY_LOCATION: $jwt_verify_publickey_location,
     SMALLRYE_JWT_SIGN_KEY: $jwt_sign_key,
