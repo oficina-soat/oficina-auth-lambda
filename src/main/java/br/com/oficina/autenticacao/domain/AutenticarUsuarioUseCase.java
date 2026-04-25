@@ -66,11 +66,12 @@ public class AutenticarUsuarioUseCase {
             }
 
             var now = Instant.now();
+            String normalizedIssuer = normalizeIssuer(configured(issuer, DEFAULT_ISSUER));
             Set<String> grupos = usuarioEntity.papelEntities.stream()
                     .map(papelEntity -> papelEntity.papel)
                     .collect(Collectors.toSet());
 
-            String accessToken = timing.jwt(() -> Jwt.issuer(configured(issuer, DEFAULT_ISSUER))
+            String accessToken = timing.jwt(() -> Jwt.issuer(normalizedIssuer)
                     .subject(usuarioEntity.documento())
                     .audience(configured(audience, DEFAULT_AUDIENCE))
                     .scope(configured(scope, DEFAULT_SCOPE))
@@ -91,5 +92,9 @@ public class AutenticarUsuarioUseCase {
 
     private static String configured(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static String normalizeIssuer(String value) {
+        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 }

@@ -191,6 +191,15 @@ trim() {
   printf '%s' "${value}"
 }
 
+normalize_url_like_value() {
+  local value
+  value="$(trim "$1")"
+  while [[ -n "${value}" && "${value}" == */ ]]; do
+    value="${value%/}"
+  done
+  printf '%s' "${value}"
+}
+
 require_valid_secret_id() {
   local value="$1"
   local name="$2"
@@ -1009,6 +1018,8 @@ if [[ -z "${OFICINA_AUTH_ISSUER}" && "${ATTACH_API_GATEWAY}" == "true" ]]; then
   OFICINA_AUTH_ISSUER="$(api_gateway_endpoint "${auth_api_id}")"
 fi
 
+OFICINA_AUTH_ISSUER="$(normalize_url_like_value "${OFICINA_AUTH_ISSUER}")"
+
 current_env_file="$(mktemp)"
 desired_env_file="$(mktemp)"
 merged_env_file="$(mktemp)"
@@ -1112,7 +1123,39 @@ fi
 jq -n \
   --slurpfile current "${current_env_file}" \
   --slurpfile desired "${desired_env_file}" \
-  '{Variables: (($current[0] // {}) + ($desired[0] // {}) | with_entries(select(.value != "")))}' > "${merged_env_file}"
+  '
+  def managed_keys: [
+    "DISABLE_SIGNAL_HANDLERS",
+    "SECRETS_MANAGER_CONFIG_ENABLED",
+    "QUARKUS_DATASOURCE_USERNAME",
+    "QUARKUS_DATASOURCE_PASSWORD",
+    "QUARKUS_DATASOURCE_JDBC_URL",
+    "AUTH_DB_SECRET_NAME",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_",
+    "JWT_SECRET_SOURCE",
+    "JWT_SECRET_NAME",
+    "JWT_SECRET_PRIVATE_KEY_FIELD",
+    "JWT_SECRET_PUBLIC_KEY_FIELD",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_",
+    "MP_JWT_VERIFY_PUBLICKEY",
+    "MP_JWT_VERIFY_PUBLICKEY_LOCATION",
+    "SMALLRYE_JWT_SIGN_KEY",
+    "SMALLRYE_JWT_SIGN_KEY_LOCATION",
+    "OFICINA_AUTH_ISSUER",
+    "OFICINA_AUTH_AUDIENCE",
+    "OFICINA_AUTH_SCOPE",
+    "OFICINA_AUTH_KEY_ID"
+  ];
+  {
+    Variables: (
+      (($current[0] // {})
+      | with_entries(select((.key as $key | managed_keys | index($key)) | not)))
+      + ($desired[0] // {})
+      | with_entries(select(.value != ""))
+    )
+  }' > "${merged_env_file}"
 
 vpc_config="SubnetIds=${LAMBDA_SUBNET_IDS},SecurityGroupIds=${lambda_sg_id}"
 
