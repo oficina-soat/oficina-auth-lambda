@@ -73,7 +73,11 @@ O build nativo usa o profile `native-aws` e depende de container runtime dispon�
 
 ## Commits
 
-Quando houver commit, use mensagens em português seguindo Conventional Commits.
+Sempre que houver alterações no repositório ao final da tarefa, crie commit antes de encerrar a resposta.
+
+- Antes do commit, adicione ao Git todos os arquivos novos criados na tarefa com `git add`.
+- Ao preparar o commit, inclua também os arquivos modificados relacionados à alteração concluída.
+- Use mensagens em português seguindo Conventional Commits.
 
 Exemplos válidos:
 
