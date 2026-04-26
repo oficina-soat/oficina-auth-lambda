@@ -353,7 +353,7 @@ jobs:
           source ./scripts/lambda-modules.sh
           release_assets_staging_dir=".tmp/release-assets"
           rm -rf "${release_assets_staging_dir}"
-          mkdir -p "${release_assets_staging_dir}" target/github-release
+          mkdir -p "${release_assets_staging_dir}"
 
           if [[ -z "${IMPACTED_MODULES}" ]]; then
             echo "Nenhum modulo impactado detectado para a release ${LAMBDA_RELEASE_TAG}" >&2
@@ -382,26 +382,6 @@ jobs:
             --target "${GITHUB_SHA}" \
             --title "${LAMBDA_RELEASE_TAG}" \
             --notes "Release das Lambdas Oficina ${LAMBDA_RELEASE_VERSION} (${LAMBDA_ARCHITECTURE})."
-
-      - name: Download release assets and prepare module targets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMPACTED_MODULES: ${{ needs.detect_release_state.outputs.impacted_modules_csv }}
-        run: |
-          source ./scripts/lambda-modules.sh
-
-          for module in ${IMPACTED_MODULES//,/ }; do
-            load_lambda_module "${module}"
-            asset_name="$(lambda_release_asset_name "${module}" "${LAMBDA_RELEASE_VERSION}" "${LAMBDA_ARCHITECTURE}")"
-            mkdir -p "target/github-release/${module}" "${module}/target"
-            gh release download "${LAMBDA_RELEASE_TAG}" \
-              --pattern "${asset_name}" \
-              --dir "target/github-release/${module}" \
-              --clobber
-            cp "target/github-release/${module}/${asset_name}" "${module}/target/function.zip"
-            cp "target/github-release/${module}/${asset_name}" "${module}/target/${LAMBDA_NAMED_ARTIFACT_FILENAME}"
-          done
 
       - name: Configure AWS credentials
         if: env.LAMBDA_ARTIFACT_BUCKET != ''
