@@ -43,13 +43,13 @@ load_lambda_module() {
       LAMBDA_RELEASE_BASENAME="oficina-notificacao-lambda"
       LAMBDA_FUNCTION_NAME_DEFAULT="oficina-notificacao-lambda-lab"
       LAMBDA_ARTIFACT_PREFIX_DEFAULT="oficina/lab/lambda/oficina-notificacao-lambda"
-      LAMBDA_EXTRA_ENV_JSON_DEFAULT='{"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_MOCK":"true"}'
+      LAMBDA_EXTRA_ENV_JSON_DEFAULT='{"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}'
       LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT="POST /notificacoes/email"
       LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /notificacoes/email"
       LAMBDA_ENV_PREFIX="NOTIFICACAO"
       LAMBDA_USES_DATABASE="false"
       LAMBDA_USES_JWT="false"
-      LAMBDA_ATTACH_VPC_DEFAULT="false"
+      LAMBDA_ATTACH_VPC_DEFAULT="true"
       ;;
   esac
 

@@ -145,10 +145,12 @@ Notificação:
 Se esse valor não estiver configurado no GitHub Environment `lab`, os workflows usam o fallback:
 
 ```json
-{"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_MOCK":"true"}
+{"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}
 ```
 
-Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` for sobrescrito para SMTP real, o JSON deve incluir `QUARKUS_MAILER_FROM`. Quando `QUARKUS_MAILER_MOCK` não estiver em `true`, também deve incluir `QUARKUS_MAILER_HOST`.
+Com esse fallback, a `notificacao-lambda` passa a subir com `NOTIFICACAO_LAMBDA_ATTACH_VPC=true`, reutiliza o SG `NOTIFICACAO_LAMBDA_SECURITY_GROUP_NAME` e tenta resolver automaticamente o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp`, criado pelo repositório `oficina-infra-k8s`.
+
+Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` for sobrescrito para SMTP real externo, o JSON deve incluir `QUARKUS_MAILER_FROM`. Quando `QUARKUS_MAILER_MOCK` não estiver em `true`, também deve incluir `QUARKUS_MAILER_HOST`.
 
 ## Redeploy manual
 

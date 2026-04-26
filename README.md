@@ -126,9 +126,10 @@ Defaults operacionais:
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
-  - não anexa VPC por padrão
-  - usa por padrão `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON={"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_MOCK":"true"}` no ambiente `lab`
-  - quando sobrescrito para SMTP real, exige `QUARKUS_MAILER_FROM` e, se `QUARKUS_MAILER_MOCK` não for `true`, também `QUARKUS_MAILER_HOST`
+  - anexa VPC por padrão no ambiente `lab`
+  - usa por padrão um SG dedicado `${EKS_CLUSTER_NAME}-notificacao-lambda` para alcançar o MailHog privado criado pelo repositório `oficina-infra-k8s`
+  - usa por padrão `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON={"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}` e resolve automaticamente o host privado do MailHog no deploy
+  - quando sobrescrito para SMTP real externo, exige `QUARKUS_MAILER_FROM`; quando `QUARKUS_MAILER_MOCK` não for `true`, também exige `QUARKUS_MAILER_HOST`
 
 Para configs específicas da função, os workflows e scripts usam nomes separados por Lambda, por exemplo:
 
@@ -147,9 +148,13 @@ Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` nao for informado, o deploy da `notificac
 ```json
 {
   "QUARKUS_MAILER_FROM": "noreply@oficina.local",
-  "QUARKUS_MAILER_MOCK": "true"
+  "QUARKUS_MAILER_PORT": "1025",
+  "QUARKUS_MAILER_TLS": "false",
+  "QUARKUS_MAILER_START_TLS": "DISABLED"
 }
 ```
+
+Nesse modo, o script de deploy descobre o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp` criado pela infra do laboratório e injeta `QUARKUS_MAILER_HOST` automaticamente. Se o NLB ou o SG dedicado não existirem, o deploy falha cedo em vez de abrir acesso mais amplo.
 
 Exemplo para envio real:
 
