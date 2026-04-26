@@ -9,9 +9,9 @@ INSERT INTO papel (id, nome) VALUES
     (3, 'recepcionista');
 
 INSERT INTO usuario (id, pessoa_id, password, status) VALUES
-    (1, 1, '$2a$10$1CBAHD.wKOCpNFGnEMUfn.sMSf8Muag0NWrtrBBxJpssTdZ1OCN3e', 'ATIVO'),
-    (2, 2, '$2a$10$1CBAHD.wKOCpNFGnEMUfn.sMSf8Muag0NWrtrBBxJpssTdZ1OCN3e', 'ATIVO'),
-    (3, 3, '$2a$10$1CBAHD.wKOCpNFGnEMUfn.sMSf8Muag0NWrtrBBxJpssTdZ1OCN3e', 'ATIVO');
+    (1, 1, '$2a$10$OqdJA0ubv0ANPU4TfphJAOeZ0QcQca3GlnLtuahh6C6bV5how5gbm', 'ATIVO'),
+    (2, 2, '$2a$10$OqdJA0ubv0ANPU4TfphJAOeZ0QcQca3GlnLtuahh6C6bV5how5gbm', 'ATIVO'),
+    (3, 3, '$2a$10$OqdJA0ubv0ANPU4TfphJAOeZ0QcQca3GlnLtuahh6C6bV5how5gbm', 'ATIVO');
 
 INSERT INTO usuario_papel (usuario_id, papel_id) VALUES
     (1, 1),
