@@ -66,7 +66,7 @@ LAMBDA_ATTACH_VPC="$(pick_module_var LAMBDA_ATTACH_VPC "" "${LAMBDA_ATTACH_VPC_D
 LAMBDA_VPC_ID="$(pick_module_var LAMBDA_VPC_ID LAMBDA_VPC_ID "")"
 LAMBDA_SUBNET_IDS="$(pick_module_var LAMBDA_SUBNET_IDS LAMBDA_SUBNET_IDS "")"
 LAMBDA_SECURITY_GROUP_NAME="$(pick_module_var LAMBDA_SECURITY_GROUP_NAME LAMBDA_SECURITY_GROUP_NAME "")"
-LAMBDA_EXTRA_ENV_JSON="$(pick_module_var LAMBDA_EXTRA_ENV_JSON LAMBDA_EXTRA_ENV_JSON "{}")"
+LAMBDA_EXTRA_ENV_JSON="$(pick_module_var LAMBDA_EXTRA_ENV_JSON LAMBDA_EXTRA_ENV_JSON "${LAMBDA_EXTRA_ENV_JSON_DEFAULT}")"
 QUARKUS_DATASOURCE_USERNAME="${QUARKUS_DATASOURCE_USERNAME:-}"
 QUARKUS_DATASOURCE_PASSWORD="${QUARKUS_DATASOURCE_PASSWORD:-}"
 QUARKUS_DATASOURCE_JDBC_URL="${QUARKUS_DATASOURCE_JDBC_URL:-}"
@@ -94,6 +94,7 @@ API_GATEWAY_ROUTE_KEY="$(pick_module_var API_GATEWAY_ROUTE_KEY API_GATEWAY_ROUTE
 API_GATEWAY_ROUTE_KEYS="$(pick_module_var API_GATEWAY_ROUTE_KEYS API_GATEWAY_ROUTE_KEYS "${LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT}")"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
+NOTIFICACAO_MAILHOG_NLB_NAME="${NOTIFICACAO_MAILHOG_NLB_NAME:-}"
 
 current_env_file=""
 desired_env_file=""
@@ -170,6 +171,16 @@ trim() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "${value}"
+}
+
+default_notificacao_lambda_security_group_name() {
+  local cluster_name="${EKS_CLUSTER_NAME:-eks-lab}"
+  printf '%s-notificacao-lambda' "${cluster_name}"
+}
+
+default_mailhog_smtp_nlb_name() {
+  local cluster_name="${EKS_CLUSTER_NAME:-eks-lab}"
+  printf '%.29s' "${cluster_name}-mailhog-smtp"
 }
 
 normalize_url_like_value() {
@@ -929,6 +940,96 @@ validate_json_object() {
   fi
 }
 
+resolve_mailhog_private_host() {
+  local nlb_name
+  local output
+  local status
+
+  nlb_name="${NOTIFICACAO_MAILHOG_NLB_NAME:-$(default_mailhog_smtp_nlb_name)}"
+
+  set +e
+  output="$(
+    aws --region "${AWS_REGION}" elbv2 describe-load-balancers \
+      --names "${nlb_name}" \
+      --query 'LoadBalancers[0].DNSName' \
+      --output text 2>&1
+  )"
+  status=$?
+  set -e
+
+  if [[ ${status} -ne 0 ]]; then
+    if grep -q "LoadBalancerNotFound" <<<"${output}"; then
+      return 1
+    fi
+
+    echo "${output}" >&2
+    exit "${status}"
+  fi
+
+  if [[ -z "${output}" || "${output}" == "None" ]]; then
+    return 1
+  fi
+
+  printf '%s' "${output}"
+}
+
+apply_notificacao_mailer_defaults() {
+  if [[ "${LAMBDA_MODULE}" != "notificacao-lambda" ]]; then
+    return
+  fi
+
+  local mailer_from
+  local mailer_host
+  local mailer_mock
+
+  mailer_from="$(trim "$(jq -r '."QUARKUS_MAILER_FROM" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+  mailer_host="$(trim "$(jq -r '."QUARKUS_MAILER_HOST" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+  mailer_mock="$(trim "$(jq -r '."QUARKUS_MAILER_MOCK" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+
+  if [[ -z "${mailer_from}" ]]; then
+    mailer_from="noreply@oficina.local"
+  fi
+
+  if [[ "${mailer_mock}" != "true" && -z "${mailer_host}" ]]; then
+    mailer_host="$(resolve_mailhog_private_host || true)"
+  fi
+
+  LAMBDA_EXTRA_ENV_JSON="$(
+    jq -cn \
+      --argjson current "${LAMBDA_EXTRA_ENV_JSON}" \
+      --arg mailer_from "${mailer_from}" \
+      --arg mailer_host "${mailer_host}" '
+        $current
+        + (if (($current."QUARKUS_MAILER_FROM" // "") == "") and $mailer_from != "" then
+             {"QUARKUS_MAILER_FROM": $mailer_from}
+           else
+             {}
+           end)
+        + (if (($current."QUARKUS_MAILER_MOCK" // "") != "true") and (($current."QUARKUS_MAILER_HOST" // "") == "") and $mailer_host != "" then
+             {
+               "QUARKUS_MAILER_HOST": $mailer_host,
+               "QUARKUS_MAILER_PORT": ($current."QUARKUS_MAILER_PORT" // "1025"),
+               "QUARKUS_MAILER_TLS": ($current."QUARKUS_MAILER_TLS" // "false"),
+               "QUARKUS_MAILER_START_TLS": ($current."QUARKUS_MAILER_START_TLS" // "DISABLED")
+             }
+           else
+             {}
+           end)
+      '
+  )"
+}
+
+notificacao_mailer_mock_enabled() {
+  local mailer_mock
+
+  if [[ "${LAMBDA_MODULE}" != "notificacao-lambda" ]]; then
+    return 1
+  fi
+
+  mailer_mock="$(trim "$(jq -r '."QUARKUS_MAILER_MOCK" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+  [[ "${mailer_mock}" == "true" ]]
+}
+
 validate_notificacao_mailer_env() {
   if [[ "${LAMBDA_MODULE}" != "notificacao-lambda" ]]; then
     return
@@ -946,8 +1047,13 @@ validate_notificacao_mailer_env() {
     exit 1
   fi
 
+  if [[ "${mailer_mock}" != "true" && "${LAMBDA_ATTACH_VPC}" != "true" ]]; then
+    echo "A notificacao-lambda precisa de NOTIFICACAO_LAMBDA_ATTACH_VPC=true para acessar o MailHog privado com seguranca." >&2
+    exit 1
+  fi
+
   if [[ "${mailer_mock}" != "true" && -z "${mailer_host}" ]]; then
-    echo "NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON deve informar QUARKUS_MAILER_HOST ou QUARKUS_MAILER_MOCK=true para inicializar a notificacao-lambda com seguranca." >&2
+    echo "Nao foi possivel resolver o host privado do MailHog. Verifique o NLB interno ${NOTIFICACAO_MAILHOG_NLB_NAME:-$(default_mailhog_smtp_nlb_name)} ou informe QUARKUS_MAILER_HOST explicitamente em NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON." >&2
     exit 1
   fi
 }
@@ -975,6 +1081,7 @@ require_non_empty "${AWS_REGION}" "AWS_REGION"
 require_non_empty "${LAMBDA_FUNCTION_NAME}" "LAMBDA_FUNCTION_NAME"
 
 validate_json_object "${LAMBDA_EXTRA_ENV_JSON}" "LAMBDA_EXTRA_ENV_JSON"
+apply_notificacao_mailer_defaults
 validate_notificacao_mailer_env
 
 if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
@@ -991,7 +1098,11 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
 fi
 
 if [[ -z "${LAMBDA_SECURITY_GROUP_NAME}" ]]; then
-  LAMBDA_SECURITY_GROUP_NAME="${LAMBDA_FUNCTION_NAME}-sg"
+  if [[ "${LAMBDA_MODULE}" == "notificacao-lambda" ]]; then
+    LAMBDA_SECURITY_GROUP_NAME="$(default_notificacao_lambda_security_group_name)"
+  else
+    LAMBDA_SECURITY_GROUP_NAME="${LAMBDA_FUNCTION_NAME}-sg"
+  fi
 fi
 
 LAMBDA_SUBNET_IDS="$(normalize_list "${LAMBDA_SUBNET_IDS}")"
@@ -1054,6 +1165,11 @@ if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
   )"
 
   if [[ "${lambda_sg_id}" == "None" || -z "${lambda_sg_id}" ]]; then
+    if [[ "${LAMBDA_MODULE}" == "notificacao-lambda" ]] && ! notificacao_mailer_mock_enabled; then
+      echo "Security group ${LAMBDA_SECURITY_GROUP_NAME} nao encontrado na VPC ${LAMBDA_VPC_ID}. Aplique antes a infra do laboratorio para criar o SG dedicado da notificacao-lambda e liberar o acesso privado ao MailHog." >&2
+      exit 1
+    fi
+
     lambda_sg_id="$(create_security_group "${LAMBDA_SECURITY_GROUP_NAME}" "${LAMBDA_VPC_ID}")"
   fi
 
