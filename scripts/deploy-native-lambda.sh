@@ -4,7 +4,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-ARTIFACT_PATH="${ARTIFACT_PATH:-${REPO_ROOT}/target/function.zip}"
+source "${SCRIPT_DIR}/lambda-modules.sh"
+
+MODULE="${1:-${LAMBDA_MODULE:-}}"
+if [[ -z "${MODULE}" ]]; then
+  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda>" >&2
+  exit 1
+fi
+
+load_lambda_module "${MODULE}" || {
+  echo "Modulo de Lambda invalido: ${MODULE}" >&2
+  exit 1
+}
+
+pick_module_var() {
+  local suffix="$1"
+  local generic_name="$2"
+  local default_value="$3"
+  local module_var_name="${LAMBDA_ENV_PREFIX}_${suffix}"
+  local value="${!module_var_name:-}"
+
+  if [[ -z "${value}" && -n "${generic_name}" ]]; then
+    value="${!generic_name:-}"
+  fi
+
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+
+  printf '%s' "${default_value}"
+}
+
+ARTIFACT_PATH="${ARTIFACT_PATH:-${REPO_ROOT}/${LAMBDA_BUILD_DIR}/function.zip}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
 DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
@@ -24,15 +56,17 @@ AUTH_DB_SECRET_KMS_KEY_ID="${AUTH_DB_SECRET_KMS_KEY_ID:-}"
 ROTATE_AUTH_DB_PASSWORD="${ROTATE_AUTH_DB_PASSWORD:-false}"
 AUTO_ALLOW_DEPLOY_RUNNER_CIDR="${AUTO_ALLOW_DEPLOY_RUNNER_CIDR:-true}"
 CI_RUNNER_PUBLIC_IP_URL="${CI_RUNNER_PUBLIC_IP_URL:-https://checkip.amazonaws.com}"
-LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-oficina-auth-lambda-lab}"
-LAMBDA_RUNTIME="${LAMBDA_RUNTIME:-provided.al2023}"
-LAMBDA_ARCHITECTURE="${LAMBDA_ARCHITECTURE:-x86_64}"
-LAMBDA_MEMORY_SIZE="${LAMBDA_MEMORY_SIZE:-256}"
-LAMBDA_TIMEOUT="${LAMBDA_TIMEOUT:-15}"
-LAMBDA_ROLE_ARN="${LAMBDA_ROLE_ARN:-}"
-LAMBDA_VPC_ID="${LAMBDA_VPC_ID:-}"
-LAMBDA_SUBNET_IDS="${LAMBDA_SUBNET_IDS:-}"
-LAMBDA_SECURITY_GROUP_NAME="${LAMBDA_SECURITY_GROUP_NAME:-}"
+LAMBDA_FUNCTION_NAME="$(pick_module_var LAMBDA_FUNCTION_NAME LAMBDA_FUNCTION_NAME "${LAMBDA_FUNCTION_NAME_DEFAULT}")"
+LAMBDA_RUNTIME="$(pick_module_var LAMBDA_RUNTIME LAMBDA_RUNTIME provided.al2023)"
+LAMBDA_ARCHITECTURE="$(pick_module_var LAMBDA_ARCHITECTURE LAMBDA_ARCHITECTURE x86_64)"
+LAMBDA_MEMORY_SIZE="$(pick_module_var LAMBDA_MEMORY_SIZE LAMBDA_MEMORY_SIZE 256)"
+LAMBDA_TIMEOUT="$(pick_module_var LAMBDA_TIMEOUT LAMBDA_TIMEOUT 15)"
+LAMBDA_ROLE_ARN="$(pick_module_var LAMBDA_ROLE_ARN LAMBDA_ROLE_ARN "")"
+LAMBDA_ATTACH_VPC="$(pick_module_var LAMBDA_ATTACH_VPC "" "${LAMBDA_ATTACH_VPC_DEFAULT}")"
+LAMBDA_VPC_ID="$(pick_module_var LAMBDA_VPC_ID LAMBDA_VPC_ID "")"
+LAMBDA_SUBNET_IDS="$(pick_module_var LAMBDA_SUBNET_IDS LAMBDA_SUBNET_IDS "")"
+LAMBDA_SECURITY_GROUP_NAME="$(pick_module_var LAMBDA_SECURITY_GROUP_NAME LAMBDA_SECURITY_GROUP_NAME "")"
+LAMBDA_EXTRA_ENV_JSON="$(pick_module_var LAMBDA_EXTRA_ENV_JSON LAMBDA_EXTRA_ENV_JSON "{}")"
 QUARKUS_DATASOURCE_USERNAME="${QUARKUS_DATASOURCE_USERNAME:-}"
 QUARKUS_DATASOURCE_PASSWORD="${QUARKUS_DATASOURCE_PASSWORD:-}"
 QUARKUS_DATASOURCE_JDBC_URL="${QUARKUS_DATASOURCE_JDBC_URL:-}"
@@ -46,18 +80,18 @@ JWT_SECRET_PRIVATE_KEY_FIELD="${JWT_SECRET_PRIVATE_KEY_FIELD:-privateKeyPem}"
 JWT_SECRET_PUBLIC_KEY_FIELD="${JWT_SECRET_PUBLIC_KEY_FIELD:-publicKeyPem}"
 JWT_SECRET_KMS_KEY_ID="${JWT_SECRET_KMS_KEY_ID:-}"
 ROTATE_JWT_SECRET="${ROTATE_JWT_SECRET:-false}"
-JWT_DIR="${JWT_DIR:-.tmp/jwt}"
+JWT_DIR="${JWT_DIR:-${LAMBDA_MODULE_DIR}/src/main/resources/jwt}"
 REGENERATE_JWT="${REGENERATE_JWT:-false}"
 LAMBDA_SECRET_INJECTION_MODE="${LAMBDA_SECRET_INJECTION_MODE:-env-vars}"
 OFICINA_AUTH_ISSUER="${OFICINA_AUTH_ISSUER:-}"
 OFICINA_AUTH_AUDIENCE="${OFICINA_AUTH_AUDIENCE:-oficina-app}"
 OFICINA_AUTH_SCOPE="${OFICINA_AUTH_SCOPE:-oficina-app}"
 OFICINA_AUTH_KEY_ID="${OFICINA_AUTH_KEY_ID:-oficina-lab-rsa}"
-ATTACH_API_GATEWAY="${ATTACH_API_GATEWAY:-true}"
-API_GATEWAY_ID="${API_GATEWAY_ID:-}"
-API_GATEWAY_NAME="${API_GATEWAY_NAME:-${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}}"
-API_GATEWAY_ROUTE_KEY="${API_GATEWAY_ROUTE_KEY:-POST /auth}"
-API_GATEWAY_ROUTE_KEYS="${API_GATEWAY_ROUTE_KEYS:-${API_GATEWAY_ROUTE_KEY};POST /auth/token;GET /.well-known/openid-configuration;GET /.well-known/jwks.json}"
+ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY ATTACH_API_GATEWAY true)"
+API_GATEWAY_ID="$(pick_module_var API_GATEWAY_ID API_GATEWAY_ID "")"
+API_GATEWAY_NAME="$(pick_module_var API_GATEWAY_NAME API_GATEWAY_NAME "${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}")"
+API_GATEWAY_ROUTE_KEY="$(pick_module_var API_GATEWAY_ROUTE_KEY API_GATEWAY_ROUTE_KEY "${LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT}")"
+API_GATEWAY_ROUTE_KEYS="$(pick_module_var API_GATEWAY_ROUTE_KEYS API_GATEWAY_ROUTE_KEYS "${LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT}")"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
 
@@ -83,61 +117,8 @@ cleanup() {
 
 trap cleanup EXIT
 
-usage() {
-  cat <<EOF
-Uso:
-  $(basename "$0")
-
-Variaveis obrigatorias:
-  AWS_REGION
-  LAMBDA_FUNCTION_NAME
-
-Variaveis opcionais:
-  ARTIFACT_PATH                Zip da Lambda. Default: target/function.zip
-  EKS_CLUSTER_NAME             Fallback opcional para descobrir VPC/subnets
-  DB_INSTANCE_IDENTIFIER       Identificador do RDS. Default: oficina-postgres-lab
-  DB_NAME ou QUARKUS_DATASOURCE_DB_NAME
-  DB_SSLMODE                   Default: require
-  DB_SECURITY_GROUP_IDS        Lista CSV ou JSON de security groups do RDS
-  BOOTSTRAP_AUTH_DB_USER       Cria/atualiza usuario proprio no RDS. Default: true
-  AUTH_DB_USER                 Usuario da Lambda no RDS. Default: oficina_auth_lambda
-  AUTH_DB_PASSWORD             Senha da Lambda no RDS. Gerada quando ausente
-  AUTH_DB_SECRET_NAME          Secret da credencial da Lambda. Default: oficina/lab/database/auth-lambda
-  STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER true|false. Default: true
-  ROTATE_AUTH_DB_PASSWORD      Gera nova senha mesmo com secret existente. Default: false
-  MASTER_SECRET_ARN            Secret master do RDS. Default: descoberto no RDS
-  AUTO_ALLOW_DEPLOY_RUNNER_CIDR Libera temporariamente o IP do runner no RDS. Default: true
-  LAMBDA_ROLE_ARN              Obrigatoria apenas na primeira criacao
-  LAMBDA_RUNTIME               Default: provided.al2023
-  LAMBDA_ARCHITECTURE          Default: x86_64
-  LAMBDA_MEMORY_SIZE           Default: 256
-  LAMBDA_TIMEOUT               Default: 15
-  LAMBDA_VPC_ID                Override da VPC
-  LAMBDA_SUBNET_IDS            Lista CSV ou JSON de subnets
-  LAMBDA_SECURITY_GROUP_NAME   Default: <LAMBDA_FUNCTION_NAME>-sg
-  QUARKUS_DATASOURCE_JDBC_URL  Override completo do JDBC URL
-  JWT_SECRET_SOURCE            aws-secrets-manager|local-files|env-vars. Default: aws-secrets-manager
-  JWT_SECRET_NAME              Secret JWT compartilhado. Default: oficina/lab/jwt
-  ROTATE_JWT_SECRET            Gera novo par JWT no Secrets Manager. Default: false
-  JWT_DIR                      Diretorio de chaves para JWT_SECRET_SOURCE=local-files
-  REGENERATE_JWT               Regenera chaves locais. Default: false
-  LAMBDA_SECRET_INJECTION_MODE env-vars|runtime-secrets-manager. Default: env-vars
-  OFICINA_AUTH_ISSUER          Issuer publico dos access tokens. Default: endpoint do API Gateway quando anexado
-  OFICINA_AUTH_AUDIENCE        Audience dos access tokens. Default: oficina-app
-  OFICINA_AUTH_SCOPE           Scope padrao dos access tokens. Default: oficina-app
-  OFICINA_AUTH_KEY_ID          kid usado no header JWS e no JWKS. Default: oficina-lab-rsa
-  ATTACH_API_GATEWAY           Vincula a Lambda ao HTTP API. Default: true
-  API_GATEWAY_ID               ID do HTTP API existente
-  API_GATEWAY_NAME             Nome do HTTP API existente. Default: <EKS_CLUSTER_NAME>-http-api
-  API_GATEWAY_ROUTE_KEY        Route key. Default: POST /auth
-  API_GATEWAY_ROUTE_KEYS       Route keys separados por ';'. Default inclui POST /auth, POST /auth/token e JWKS
-  API_GATEWAY_PAYLOAD_FORMAT_VERSION Default: 2.0
-  API_GATEWAY_TIMEOUT_MILLISECONDS   Default: 30000
-EOF
-}
-
 log() {
-  printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+  printf '\n[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${LAMBDA_MODULE}" "$*"
 }
 
 fail_with_context() {
@@ -323,14 +304,45 @@ generate_password() {
 }
 
 generate_jwt_keypair() {
-  local jwt_dir="$1"
+  local target_jwt_dir="$1"
 
   require_cmd openssl
-  mkdir -p "${jwt_dir}"
-  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${jwt_dir}/privateKey.pem"
-  openssl pkey -in "${jwt_dir}/privateKey.pem" -pubout -out "${jwt_dir}/publicKey.pem"
-  chmod 600 "${jwt_dir}/privateKey.pem"
-  chmod 644 "${jwt_dir}/publicKey.pem"
+  mkdir -p "${target_jwt_dir}"
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${target_jwt_dir}/privateKey.pem"
+  openssl pkey -in "${target_jwt_dir}/privateKey.pem" -pubout -out "${target_jwt_dir}/publicKey.pem"
+  chmod 600 "${target_jwt_dir}/privateKey.pem"
+  chmod 644 "${target_jwt_dir}/publicKey.pem"
+}
+
+upsert_secret_string() {
+  local secret_name="$1"
+  local secret_file="$2"
+  local kms_key_id="$3"
+  local description="$4"
+
+  require_non_empty "${secret_name}" "secret_name"
+  require_non_empty "${secret_file}" "secret_file"
+
+  if secret_exists "${secret_name}"; then
+    aws --region "${AWS_REGION}" secretsmanager put-secret-value \
+      --secret-id "${secret_name}" \
+      --secret-string "file://${secret_file}" >/dev/null
+    return
+  fi
+
+  if [[ -n "${kms_key_id}" ]]; then
+    aws --region "${AWS_REGION}" secretsmanager create-secret \
+      --name "${secret_name}" \
+      --kms-key-id "${kms_key_id}" \
+      --description "${description}" \
+      --secret-string "file://${secret_file}" >/dev/null
+    return
+  fi
+
+  aws --region "${AWS_REGION}" secretsmanager create-secret \
+    --name "${secret_name}" \
+    --description "${description}" \
+    --secret-string "file://${secret_file}" >/dev/null
 }
 
 create_or_rotate_aws_jwt_secret() {
@@ -492,7 +504,7 @@ create_security_group() {
     --group-name "${group_name}" \
     --description "Security group da Lambda ${LAMBDA_FUNCTION_NAME}" \
     --vpc-id "${vpc_id}" \
-    --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${group_name}},{Key=ManagedBy,Value=github-actions},{Key=Component,Value=lambda}]" \
+    --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=${group_name}},{Key=ManagedBy,Value=github-actions},{Key=Component,Value=${LAMBDA_MODULE}}]" \
     --query 'GroupId' \
     --output text
 }
@@ -500,14 +512,14 @@ create_security_group() {
 authorize_db_ingress() {
   local db_group_id="$1"
   local lambda_group_id="$2"
-  local db_port="$3"
+  local target_db_port="$3"
   local output
 
   set +e
   output="$(
     aws --region "${AWS_REGION}" ec2 authorize-security-group-ingress \
       --group-id "${db_group_id}" \
-      --ip-permissions "IpProtocol=tcp,FromPort=${db_port},ToPort=${db_port},UserIdGroupPairs=[{GroupId=${lambda_group_id}}]" \
+      --ip-permissions "IpProtocol=tcp,FromPort=${target_db_port},ToPort=${target_db_port},UserIdGroupPairs=[{GroupId=${lambda_group_id}}]" \
       2>&1
   )"
   local status=$?
@@ -528,14 +540,14 @@ authorize_db_ingress() {
 authorize_db_cidr_ingress() {
   local db_group_id="$1"
   local cidr_block="$2"
-  local db_port="$3"
+  local target_db_port="$3"
   local output
 
   set +e
   output="$(
     aws --region "${AWS_REGION}" ec2 authorize-security-group-ingress \
       --group-id "${db_group_id}" \
-      --ip-permissions "IpProtocol=tcp,FromPort=${db_port},ToPort=${db_port},IpRanges=[{CidrIp=${cidr_block}}]" \
+      --ip-permissions "IpProtocol=tcp,FromPort=${target_db_port},ToPort=${target_db_port},IpRanges=[{CidrIp=${cidr_block}}]" \
       2>&1
   )"
   local status=$?
@@ -575,37 +587,6 @@ configure_deploy_runner_db_access() {
     log "Liberando temporariamente acesso ${DEPLOY_RUNNER_CIDR} -> ${db_group_id}:${db_port} para bootstrap do usuario"
     authorize_db_cidr_ingress "${db_group_id}" "${DEPLOY_RUNNER_CIDR}" "${db_port}"
   done
-}
-
-upsert_secret_string() {
-  local secret_name="$1"
-  local secret_file="$2"
-  local kms_key_id="$3"
-  local description="$4"
-
-  require_non_empty "${secret_name}" "secret_name"
-  require_non_empty "${secret_file}" "secret_file"
-
-  if secret_exists "${secret_name}"; then
-    aws --region "${AWS_REGION}" secretsmanager put-secret-value \
-      --secret-id "${secret_name}" \
-      --secret-string "file://${secret_file}" >/dev/null
-    return
-  fi
-
-  if [[ -n "${kms_key_id}" ]]; then
-    aws --region "${AWS_REGION}" secretsmanager create-secret \
-      --name "${secret_name}" \
-      --kms-key-id "${kms_key_id}" \
-      --description "${description}" \
-      --secret-string "file://${secret_file}" >/dev/null
-    return
-  fi
-
-  aws --region "${AWS_REGION}" secretsmanager create-secret \
-    --name "${secret_name}" \
-    --description "${description}" \
-    --secret-string "file://${secret_file}" >/dev/null
 }
 
 bootstrap_auth_db_user() {
@@ -762,16 +743,12 @@ load_auth_db_credentials_from_secret() {
   auth_db_username_secret_name="$(auth_db_secret_field_name username)"
   auth_db_password_secret_name="$(auth_db_secret_field_name password)"
 
-  if [[ -z "${QUARKUS_DATASOURCE_USERNAME}" ]]; then
-    if secret_exists "${auth_db_username_secret_name}"; then
-      QUARKUS_DATASOURCE_USERNAME="$(read_secret_string "${auth_db_username_secret_name}")"
-    fi
+  if [[ -z "${QUARKUS_DATASOURCE_USERNAME}" ]] && secret_exists "${auth_db_username_secret_name}"; then
+    QUARKUS_DATASOURCE_USERNAME="$(read_secret_string "${auth_db_username_secret_name}")"
   fi
 
-  if [[ -z "${QUARKUS_DATASOURCE_PASSWORD}" ]]; then
-    if secret_exists "${auth_db_password_secret_name}"; then
-      QUARKUS_DATASOURCE_PASSWORD="$(read_secret_string "${auth_db_password_secret_name}")"
-    fi
+  if [[ -z "${QUARKUS_DATASOURCE_PASSWORD}" ]] && secret_exists "${auth_db_password_secret_name}"; then
+    QUARKUS_DATASOURCE_PASSWORD="$(read_secret_string "${auth_db_password_secret_name}")"
   fi
 }
 
@@ -923,7 +900,7 @@ ensure_api_gateway_integration() {
   )"
   local source_arn="arn:aws:execute-api:${AWS_REGION}:${account_id}:${api_id}/*/*"
   local statement_id
-  statement_id="AllowExecutionFromApiGateway$(printf '%s' "${api_id}-${API_GATEWAY_ROUTE_KEY}" | md5sum | cut -c1-8)"
+  statement_id="AllowExecutionFromApiGateway$(printf '%s' "${api_id}-${LAMBDA_MODULE}" | md5sum | cut -c1-8)"
 
   set +e
   permission_output="$(
@@ -942,24 +919,52 @@ ensure_api_gateway_integration() {
   fi
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+validate_json_object() {
+  local json_value="$1"
+  local name="$2"
+
+  if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"${json_value}"; then
+    echo "${name} invalido: informe um JSON do tipo objeto." >&2
+    exit 1
+  fi
+}
+
+ensure_network_from_eks_if_needed() {
+  if [[ -z "${LAMBDA_VPC_ID}" || -z "${LAMBDA_SUBNET_IDS}" ]] && [[ -n "${EKS_CLUSTER_NAME}" ]]; then
+    log "VPC/subnets nao encontrados; tentando fallback pelo cluster EKS ${EKS_CLUSTER_NAME}"
+    local eks_json
+    eks_json="$(aws_json eks describe-cluster --name "${EKS_CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.{vpcId:vpcId,subnetIds:subnetIds}')"
+
+    if [[ -z "${LAMBDA_VPC_ID}" ]]; then
+      LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${eks_json}")"
+    fi
+
+    if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
+      LAMBDA_SUBNET_IDS="$(jq -r '(.subnetIds // []) | join(",")' <<<"${eks_json}")"
+    fi
+  fi
+}
 
 require_cmd aws
 require_cmd jq
 require_cmd md5sum
 require_non_empty "${AWS_REGION}" "AWS_REGION"
 require_non_empty "${LAMBDA_FUNCTION_NAME}" "LAMBDA_FUNCTION_NAME"
-require_valid_lambda_secret_injection_mode
+
+validate_json_object "${LAMBDA_EXTRA_ENV_JSON}" "LAMBDA_EXTRA_ENV_JSON"
+
+if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
+  require_valid_lambda_secret_injection_mode
+fi
 
 if [[ ! -f "${ARTIFACT_PATH}" ]]; then
   echo "Artefato nao encontrado em ${ARTIFACT_PATH}" >&2
   exit 1
 fi
 
-ensure_jwt_configuration
+if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
+  ensure_jwt_configuration
+fi
 
 if [[ -z "${LAMBDA_SECURITY_GROUP_NAME}" ]]; then
   LAMBDA_SECURITY_GROUP_NAME="${LAMBDA_FUNCTION_NAME}-sg"
@@ -968,80 +973,84 @@ fi
 LAMBDA_SUBNET_IDS="$(normalize_list "${LAMBDA_SUBNET_IDS}")"
 DB_SECURITY_GROUP_IDS="$(normalize_list "${DB_SECURITY_GROUP_IDS}")"
 
-log "Descobrindo endpoint, VPC, subnets, security groups e secret master do RDS ${DB_INSTANCE_IDENTIFIER}"
-db_json="$(aws_json rds describe-db-instances --db-instance-identifier "${DB_INSTANCE_IDENTIFIER}" --query 'DBInstances[0].{endpoint:Endpoint.Address,port:Endpoint.Port,dbName:DBName,masterSecretArn:MasterUserSecret.SecretArn,masterUsername:MasterUsername,securityGroupIds:VpcSecurityGroups[].VpcSecurityGroupId,vpcId:DBSubnetGroup.VpcId,subnetIds:DBSubnetGroup.Subnets[].SubnetIdentifier}')"
+lambda_sg_id=""
+vpc_config=""
 
-db_host="$(jq -r '.endpoint // empty' <<<"${db_json}")"
-db_port="$(jq -r '.port // empty' <<<"${db_json}")"
-db_name="$(jq -r '.dbName // empty' <<<"${db_json}")"
-db_master_secret_arn="$(jq -r '.masterSecretArn // empty' <<<"${db_json}")"
-db_master_username="$(jq -r '.masterUsername // empty' <<<"${db_json}")"
+if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
+  if [[ "${LAMBDA_USES_DATABASE}" == "true" ]]; then
+    log "Descobrindo endpoint, VPC, subnets, security groups e secret master do RDS ${DB_INSTANCE_IDENTIFIER}"
+    db_json="$(aws_json rds describe-db-instances --db-instance-identifier "${DB_INSTANCE_IDENTIFIER}" --query 'DBInstances[0].{endpoint:Endpoint.Address,port:Endpoint.Port,dbName:DBName,masterSecretArn:MasterUserSecret.SecretArn,masterUsername:MasterUsername,securityGroupIds:VpcSecurityGroups[].VpcSecurityGroupId,vpcId:DBSubnetGroup.VpcId,subnetIds:DBSubnetGroup.Subnets[].SubnetIdentifier}')"
 
-if [[ -n "${DB_NAME_OVERRIDE}" ]]; then
-  db_name="${DB_NAME_OVERRIDE}"
-fi
+    db_host="$(jq -r '.endpoint // empty' <<<"${db_json}")"
+    db_port="$(jq -r '.port // empty' <<<"${db_json}")"
+    db_name="$(jq -r '.dbName // empty' <<<"${db_json}")"
+    db_master_secret_arn="$(jq -r '.masterSecretArn // empty' <<<"${db_json}")"
+    db_master_username="$(jq -r '.masterUsername // empty' <<<"${db_json}")"
 
-if [[ -z "${DB_SECURITY_GROUP_IDS}" ]]; then
-  DB_SECURITY_GROUP_IDS="$(jq -r '(.securityGroupIds // []) | join(",")' <<<"${db_json}")"
-fi
+    if [[ -n "${DB_NAME_OVERRIDE}" ]]; then
+      db_name="${DB_NAME_OVERRIDE}"
+    fi
 
-if [[ -z "${LAMBDA_VPC_ID}" ]]; then
-  LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${db_json}")"
-fi
+    if [[ -z "${DB_SECURITY_GROUP_IDS}" ]]; then
+      DB_SECURITY_GROUP_IDS="$(jq -r '(.securityGroupIds // []) | join(",")' <<<"${db_json}")"
+    fi
 
-if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
-  LAMBDA_SUBNET_IDS="$(jq -r '(.subnetIds // []) | join(",")' <<<"${db_json}")"
-fi
+    if [[ -z "${LAMBDA_VPC_ID}" ]]; then
+      LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${db_json}")"
+    fi
 
-if [[ -z "${LAMBDA_VPC_ID}" || -z "${LAMBDA_SUBNET_IDS}" ]] && [[ -n "${EKS_CLUSTER_NAME}" ]]; then
-  log "VPC/subnets nao encontrados no RDS; tentando fallback pelo cluster EKS ${EKS_CLUSTER_NAME}"
-  eks_json="$(aws_json eks describe-cluster --name "${EKS_CLUSTER_NAME}" --query 'cluster.resourcesVpcConfig.{vpcId:vpcId,subnetIds:subnetIds}')"
+    if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
+      LAMBDA_SUBNET_IDS="$(jq -r '(.subnetIds // []) | join(",")' <<<"${db_json}")"
+    fi
 
-  if [[ -z "${LAMBDA_VPC_ID}" ]]; then
-    LAMBDA_VPC_ID="$(jq -r '.vpcId // empty' <<<"${eks_json}")"
+    ensure_network_from_eks_if_needed
+
+    require_non_empty "${db_host}" "db_host"
+    require_non_empty "${db_port}" "db_port"
+    require_non_empty "${db_name}" "DB_NAME"
+    require_non_empty "${DB_SECURITY_GROUP_IDS}" "DB_SECURITY_GROUP_IDS"
+    require_non_empty "${LAMBDA_VPC_ID}" "LAMBDA_VPC_ID"
+    require_non_empty "${LAMBDA_SUBNET_IDS}" "LAMBDA_SUBNET_IDS"
+
+    if [[ -z "${QUARKUS_DATASOURCE_JDBC_URL}" ]]; then
+      QUARKUS_DATASOURCE_JDBC_URL="jdbc:postgresql://${db_host}:${db_port}/${db_name}?sslmode=${DB_SSLMODE}"
+    fi
+  else
+    ensure_network_from_eks_if_needed
+    require_non_empty "${LAMBDA_VPC_ID}" "LAMBDA_VPC_ID"
+    require_non_empty "${LAMBDA_SUBNET_IDS}" "LAMBDA_SUBNET_IDS"
   fi
 
-  if [[ -z "${LAMBDA_SUBNET_IDS}" ]]; then
-    LAMBDA_SUBNET_IDS="$(jq -r '(.subnetIds // []) | join(",")' <<<"${eks_json}")"
+  log "Garantindo o security group da Lambda na VPC ${LAMBDA_VPC_ID}"
+  lambda_sg_id="$(
+    aws --region "${AWS_REGION}" ec2 describe-security-groups \
+      --filters "Name=vpc-id,Values=${LAMBDA_VPC_ID}" "Name=group-name,Values=${LAMBDA_SECURITY_GROUP_NAME}" \
+      --query 'SecurityGroups[0].GroupId' \
+      --output text
+  )"
+
+  if [[ "${lambda_sg_id}" == "None" || -z "${lambda_sg_id}" ]]; then
+    lambda_sg_id="$(create_security_group "${LAMBDA_SECURITY_GROUP_NAME}" "${LAMBDA_VPC_ID}")"
   fi
+
+  if [[ "${LAMBDA_USES_DATABASE}" == "true" ]]; then
+    for db_group_id in ${DB_SECURITY_GROUP_IDS//,/ }; do
+      log "Garantindo acesso ${lambda_sg_id} -> ${db_group_id}:${db_port}"
+      authorize_db_ingress "${db_group_id}" "${lambda_sg_id}" "${db_port}"
+    done
+
+    ensure_auth_db_credentials "${db_master_secret_arn}" "${db_master_username}"
+  fi
+
+  vpc_config="SubnetIds=${LAMBDA_SUBNET_IDS},SecurityGroupIds=${lambda_sg_id}"
 fi
-
-require_non_empty "${db_host}" "db_host"
-require_non_empty "${db_port}" "db_port"
-require_non_empty "${db_name}" "DB_NAME"
-require_non_empty "${DB_SECURITY_GROUP_IDS}" "DB_SECURITY_GROUP_IDS"
-require_non_empty "${LAMBDA_VPC_ID}" "LAMBDA_VPC_ID"
-require_non_empty "${LAMBDA_SUBNET_IDS}" "LAMBDA_SUBNET_IDS"
-
-if [[ -z "${QUARKUS_DATASOURCE_JDBC_URL}" ]]; then
-  QUARKUS_DATASOURCE_JDBC_URL="jdbc:postgresql://${db_host}:${db_port}/${db_name}?sslmode=${DB_SSLMODE}"
-fi
-
-log "Garantindo o security group da Lambda na VPC ${LAMBDA_VPC_ID}"
-lambda_sg_id="$(
-  aws --region "${AWS_REGION}" ec2 describe-security-groups \
-    --filters "Name=vpc-id,Values=${LAMBDA_VPC_ID}" "Name=group-name,Values=${LAMBDA_SECURITY_GROUP_NAME}" \
-    --query 'SecurityGroups[0].GroupId' \
-    --output text
-)"
-
-if [[ "${lambda_sg_id}" == "None" || -z "${lambda_sg_id}" ]]; then
-  lambda_sg_id="$(create_security_group "${LAMBDA_SECURITY_GROUP_NAME}" "${LAMBDA_VPC_ID}")"
-fi
-
-for db_group_id in ${DB_SECURITY_GROUP_IDS//,/ }; do
-  log "Garantindo acesso ${lambda_sg_id} -> ${db_group_id}:${db_port}"
-  authorize_db_ingress "${db_group_id}" "${lambda_sg_id}" "${db_port}"
-done
-
-ensure_auth_db_credentials "${db_master_secret_arn}" "${db_master_username}"
 
 function_exists="false"
 if aws --region "${AWS_REGION}" lambda get-function --function-name "${LAMBDA_FUNCTION_NAME}" >/dev/null 2>&1; then
   function_exists="true"
 fi
 
-if [[ -z "${OFICINA_AUTH_ISSUER}" && "${ATTACH_API_GATEWAY}" == "true" ]]; then
+if [[ "${LAMBDA_USES_JWT}" == "true" && -z "${OFICINA_AUTH_ISSUER}" && "${ATTACH_API_GATEWAY}" == "true" ]]; then
   auth_api_id="$(resolve_api_gateway_id)"
   require_non_empty "${auth_api_id}" "API_GATEWAY_ID"
   OFICINA_AUTH_ISSUER="$(api_gateway_endpoint "${auth_api_id}")"
@@ -1053,6 +1062,15 @@ current_env_file="$(mktemp)"
 desired_env_file="$(mktemp)"
 merged_env_file="$(mktemp)"
 
+if [[ "${function_exists}" == "true" ]]; then
+  aws --region "${AWS_REGION}" lambda get-function-configuration \
+    --function-name "${LAMBDA_FUNCTION_NAME}" \
+    --query 'Environment.Variables' \
+    --output json > "${current_env_file}"
+else
+  echo '{}' > "${current_env_file}"
+fi
+
 lambda_datasource_username="${QUARKUS_DATASOURCE_USERNAME}"
 lambda_datasource_password="${QUARKUS_DATASOURCE_PASSWORD}"
 lambda_auth_db_secret_name=""
@@ -1061,7 +1079,7 @@ lambda_auth_db_password_secret_name=""
 lambda_jwt_secret_name=""
 lambda_secrets_manager_config_enabled="false"
 
-if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] \
+if [[ "${LAMBDA_USES_DATABASE}" == "true" && "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] \
   && [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
   candidate_auth_db_username_secret_name="$(auth_db_secret_field_name username)"
   candidate_auth_db_password_secret_name="$(auth_db_secret_field_name password)"
@@ -1081,7 +1099,8 @@ lambda_jwt_verify_publickey_location="${MP_JWT_VERIFY_PUBLICKEY_LOCATION}"
 lambda_jwt_sign_key="${SMALLRYE_JWT_SIGN_KEY}"
 lambda_jwt_sign_key_location="${SMALLRYE_JWT_SIGN_KEY_LOCATION}"
 
-if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] && [[ "${JWT_SECRET_SOURCE}" == "aws-secrets-manager" ]]; then
+if [[ "${LAMBDA_USES_JWT}" == "true" && "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] \
+  && [[ "${JWT_SECRET_SOURCE}" == "aws-secrets-manager" ]]; then
   lambda_jwt_verify_publickey=""
   lambda_jwt_verify_publickey_location=""
   lambda_jwt_sign_key=""
@@ -1090,68 +1109,78 @@ if [[ "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] && [[ "$
   lambda_secrets_manager_config_enabled="true"
 fi
 
-jq -n \
-  --arg disable_signal_handlers "true" \
-  --arg secrets_manager_config_enabled "${lambda_secrets_manager_config_enabled}" \
-  --arg datasource_username "${lambda_datasource_username}" \
-  --arg datasource_password "${lambda_datasource_password}" \
-  --arg datasource_jdbc_url "${QUARKUS_DATASOURCE_JDBC_URL}" \
-  --arg auth_db_secret_name "${lambda_auth_db_secret_name}" \
-  --arg auth_db_username_secret_name "${lambda_auth_db_username_secret_name}" \
-  --arg auth_db_password_secret_name "${lambda_auth_db_password_secret_name}" \
-  --arg jwt_secret_source "${JWT_SECRET_SOURCE}" \
-  --arg jwt_secret_name "${JWT_SECRET_NAME}" \
-  --arg jwt_secret_private_key_field "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
-  --arg jwt_secret_public_key_field "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
-  --arg jwt_secret_json_name "${lambda_jwt_secret_name}" \
-  --arg jwt_verify_publickey "${lambda_jwt_verify_publickey}" \
-  --arg jwt_verify_publickey_location "${lambda_jwt_verify_publickey_location}" \
-  --arg jwt_sign_key "${lambda_jwt_sign_key}" \
-  --arg jwt_sign_key_location "${lambda_jwt_sign_key_location}" \
-  --arg oficina_auth_issuer "${OFICINA_AUTH_ISSUER}" \
-  --arg oficina_auth_audience "${OFICINA_AUTH_AUDIENCE}" \
-  --arg oficina_auth_scope "${OFICINA_AUTH_SCOPE}" \
-  --arg oficina_auth_key_id "${OFICINA_AUTH_KEY_ID}" \
-  '{
-    DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
-    SECRETS_MANAGER_CONFIG_ENABLED: $secrets_manager_config_enabled,
-    QUARKUS_DATASOURCE_USERNAME: $datasource_username,
-    QUARKUS_DATASOURCE_PASSWORD: $datasource_password,
-    QUARKUS_DATASOURCE_JDBC_URL: $datasource_jdbc_url,
-    AUTH_DB_SECRET_NAME: $auth_db_secret_name,
-    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_: $auth_db_username_secret_name,
-    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_: $auth_db_password_secret_name,
-    JWT_SECRET_SOURCE: $jwt_secret_source,
-    JWT_SECRET_NAME: $jwt_secret_name,
-    JWT_SECRET_PRIVATE_KEY_FIELD: $jwt_secret_private_key_field,
-    JWT_SECRET_PUBLIC_KEY_FIELD: $jwt_secret_public_key_field,
-    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_: $jwt_secret_json_name,
-    QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_: $jwt_secret_json_name,
-    MP_JWT_VERIFY_PUBLICKEY: $jwt_verify_publickey,
-    MP_JWT_VERIFY_PUBLICKEY_LOCATION: $jwt_verify_publickey_location,
-    SMALLRYE_JWT_SIGN_KEY: $jwt_sign_key,
-    SMALLRYE_JWT_SIGN_KEY_LOCATION: $jwt_sign_key_location,
-    OFICINA_AUTH_ISSUER: $oficina_auth_issuer,
-    OFICINA_AUTH_AUDIENCE: $oficina_auth_audience,
-    OFICINA_AUTH_SCOPE: $oficina_auth_scope,
-    OFICINA_AUTH_KEY_ID: $oficina_auth_key_id
-  }' > "${desired_env_file}"
+extra_env_keys_csv="$(jq -r 'keys | join(",")' <<<"${LAMBDA_EXTRA_ENV_JSON}")"
 
-if [[ "${function_exists}" == "true" ]]; then
-  aws --region "${AWS_REGION}" lambda get-function-configuration \
-    --function-name "${LAMBDA_FUNCTION_NAME}" \
-    --query 'Environment.Variables' \
-    --output json > "${current_env_file}"
+if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
+  jq -n \
+    --arg disable_signal_handlers "true" \
+    --arg managed_extra_env_keys "${extra_env_keys_csv}" \
+    --arg secrets_manager_config_enabled "${lambda_secrets_manager_config_enabled}" \
+    --arg datasource_username "${lambda_datasource_username}" \
+    --arg datasource_password "${lambda_datasource_password}" \
+    --arg datasource_jdbc_url "${QUARKUS_DATASOURCE_JDBC_URL}" \
+    --arg auth_db_secret_name "${lambda_auth_db_secret_name}" \
+    --arg auth_db_username_secret_name "${lambda_auth_db_username_secret_name}" \
+    --arg auth_db_password_secret_name "${lambda_auth_db_password_secret_name}" \
+    --arg jwt_secret_source "${JWT_SECRET_SOURCE}" \
+    --arg jwt_secret_name "${JWT_SECRET_NAME}" \
+    --arg jwt_secret_private_key_field "${JWT_SECRET_PRIVATE_KEY_FIELD}" \
+    --arg jwt_secret_public_key_field "${JWT_SECRET_PUBLIC_KEY_FIELD}" \
+    --arg jwt_secret_json_name "${lambda_jwt_secret_name}" \
+    --arg jwt_verify_publickey "${lambda_jwt_verify_publickey}" \
+    --arg jwt_verify_publickey_location "${lambda_jwt_verify_publickey_location}" \
+    --arg jwt_sign_key "${lambda_jwt_sign_key}" \
+    --arg jwt_sign_key_location "${lambda_jwt_sign_key_location}" \
+    --arg oficina_auth_issuer "${OFICINA_AUTH_ISSUER}" \
+    --arg oficina_auth_audience "${OFICINA_AUTH_AUDIENCE}" \
+    --arg oficina_auth_scope "${OFICINA_AUTH_SCOPE}" \
+    --arg oficina_auth_key_id "${OFICINA_AUTH_KEY_ID}" \
+    '{
+      DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+      OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS: $managed_extra_env_keys,
+      SECRETS_MANAGER_CONFIG_ENABLED: $secrets_manager_config_enabled,
+      QUARKUS_DATASOURCE_USERNAME: $datasource_username,
+      QUARKUS_DATASOURCE_PASSWORD: $datasource_password,
+      QUARKUS_DATASOURCE_JDBC_URL: $datasource_jdbc_url,
+      AUTH_DB_SECRET_NAME: $auth_db_secret_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_: $auth_db_username_secret_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_: $auth_db_password_secret_name,
+      JWT_SECRET_SOURCE: $jwt_secret_source,
+      JWT_SECRET_NAME: $jwt_secret_name,
+      JWT_SECRET_PRIVATE_KEY_FIELD: $jwt_secret_private_key_field,
+      JWT_SECRET_PUBLIC_KEY_FIELD: $jwt_secret_public_key_field,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__SMALLRYE_JWT_SIGN_KEY_: $jwt_secret_json_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__MP_JWT_VERIFY_PUBLICKEY_: $jwt_secret_json_name,
+      MP_JWT_VERIFY_PUBLICKEY: $jwt_verify_publickey,
+      MP_JWT_VERIFY_PUBLICKEY_LOCATION: $jwt_verify_publickey_location,
+      SMALLRYE_JWT_SIGN_KEY: $jwt_sign_key,
+      SMALLRYE_JWT_SIGN_KEY_LOCATION: $jwt_sign_key_location,
+      OFICINA_AUTH_ISSUER: $oficina_auth_issuer,
+      OFICINA_AUTH_AUDIENCE: $oficina_auth_audience,
+      OFICINA_AUTH_SCOPE: $oficina_auth_scope,
+      OFICINA_AUTH_KEY_ID: $oficina_auth_key_id
+    }' > "${desired_env_file}"
 else
-  echo '{}' > "${current_env_file}"
+  jq -n \
+    --arg disable_signal_handlers "true" \
+    --arg managed_extra_env_keys "${extra_env_keys_csv}" \
+    '{
+      DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+      OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS: $managed_extra_env_keys
+    }' > "${desired_env_file}"
 fi
 
 jq -n \
-  --slurpfile current "${current_env_file}" \
   --slurpfile desired "${desired_env_file}" \
-  '
-  def managed_keys: [
+  --argjson extra "${LAMBDA_EXTRA_ENV_JSON}" \
+  '($desired[0] // {}) + $extra' > "${merged_env_file}"
+mv "${merged_env_file}" "${desired_env_file}"
+merged_env_file="$(mktemp)"
+
+if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
+  builtin_managed_keys='[
     "DISABLE_SIGNAL_HANDLERS",
+    "OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS",
     "SECRETS_MANAGER_CONFIG_ENABLED",
     "QUARKUS_DATASOURCE_USERNAME",
     "QUARKUS_DATASOURCE_PASSWORD",
@@ -1173,17 +1202,40 @@ jq -n \
     "OFICINA_AUTH_AUDIENCE",
     "OFICINA_AUTH_SCOPE",
     "OFICINA_AUTH_KEY_ID"
-  ];
+  ]'
+else
+  builtin_managed_keys='[
+    "DISABLE_SIGNAL_HANDLERS",
+    "OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS"
+  ]'
+fi
+
+previous_extra_keys_csv="$(jq -r '.OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS // ""' "${current_env_file}")"
+new_extra_keys_json="$(jq -c 'keys' <<<"${LAMBDA_EXTRA_ENV_JSON}")"
+managed_keys_json="$(
+  jq -cn \
+    --argjson builtin "${builtin_managed_keys}" \
+    --arg previous "${previous_extra_keys_csv}" \
+    --argjson current "${new_extra_keys_json}" '
+      def split_csv($csv):
+        if $csv == "" then [] else ($csv | split(",") | map(select(length > 0))) end;
+      ($builtin + split_csv($previous) + $current) | unique
+    '
+)"
+
+jq -n \
+  --argjson managed "${managed_keys_json}" \
+  --slurpfile current "${current_env_file}" \
+  --slurpfile desired "${desired_env_file}" \
+  '
   {
     Variables: (
       (($current[0] // {})
-      | with_entries(select((.key as $key | managed_keys | index($key)) | not)))
+      | with_entries(select((.key as $key | $managed | index($key)) | not)))
       + ($desired[0] // {})
       | with_entries(select(.value != ""))
     )
   }' > "${merged_env_file}"
-
-vpc_config="SubnetIds=${LAMBDA_SUBNET_IDS},SecurityGroupIds=${lambda_sg_id}"
 
 if [[ "${function_exists}" == "true" ]]; then
   current_architecture="$(
@@ -1207,14 +1259,19 @@ if [[ "${function_exists}" == "true" ]]; then
     --function-name "${LAMBDA_FUNCTION_NAME}"
 
   log "Atualizando configuracao da Lambda ${LAMBDA_FUNCTION_NAME}"
-  aws --region "${AWS_REGION}" lambda update-function-configuration \
-    --function-name "${LAMBDA_FUNCTION_NAME}" \
-    --runtime "${LAMBDA_RUNTIME}" \
-    --handler not.used.in.provided.runtime \
-    --timeout "${LAMBDA_TIMEOUT}" \
-    --memory-size "${LAMBDA_MEMORY_SIZE}" \
-    --environment "file://${merged_env_file}" \
-    --vpc-config "${vpc_config}"
+  update_args=(
+    --function-name "${LAMBDA_FUNCTION_NAME}"
+    --runtime "${LAMBDA_RUNTIME}"
+    --handler not.used.in.provided.runtime
+    --timeout "${LAMBDA_TIMEOUT}"
+    --memory-size "${LAMBDA_MEMORY_SIZE}"
+    --environment "file://${merged_env_file}"
+  )
+  if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
+    update_args+=(--vpc-config "${vpc_config}")
+  fi
+
+  aws --region "${AWS_REGION}" lambda update-function-configuration "${update_args[@]}"
 
   aws --region "${AWS_REGION}" lambda wait function-updated \
     --function-name "${LAMBDA_FUNCTION_NAME}"
@@ -1222,20 +1279,25 @@ else
   require_non_empty "${LAMBDA_ROLE_ARN}" "LAMBDA_ROLE_ARN"
 
   log "Criando a Lambda ${LAMBDA_FUNCTION_NAME}"
+  create_args=(
+    --function-name "${LAMBDA_FUNCTION_NAME}"
+    --package-type Zip
+    --zip-file "fileb://${ARTIFACT_PATH}"
+    --runtime "${LAMBDA_RUNTIME}"
+    --handler not.used.in.provided.runtime
+    --role "${LAMBDA_ROLE_ARN}"
+    --architectures "${LAMBDA_ARCHITECTURE}"
+    --timeout "${LAMBDA_TIMEOUT}"
+    --memory-size "${LAMBDA_MEMORY_SIZE}"
+    --environment "file://${merged_env_file}"
+  )
+  if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
+    create_args+=(--vpc-config "${vpc_config}")
+  fi
+
   set +e
   create_output="$(
-    aws --region "${AWS_REGION}" lambda create-function \
-      --function-name "${LAMBDA_FUNCTION_NAME}" \
-      --package-type Zip \
-      --zip-file "fileb://${ARTIFACT_PATH}" \
-      --runtime "${LAMBDA_RUNTIME}" \
-      --handler not.used.in.provided.runtime \
-      --role "${LAMBDA_ROLE_ARN}" \
-      --architectures "${LAMBDA_ARCHITECTURE}" \
-      --timeout "${LAMBDA_TIMEOUT}" \
-      --memory-size "${LAMBDA_MEMORY_SIZE}" \
-      --environment "file://${merged_env_file}" \
-      --vpc-config "${vpc_config}" 2>&1
+    aws --region "${AWS_REGION}" lambda create-function "${create_args[@]}" 2>&1
   )"
   create_status=$?
   set -e
