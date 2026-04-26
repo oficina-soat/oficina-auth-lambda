@@ -29,6 +29,7 @@ load_lambda_module() {
       LAMBDA_RELEASE_BASENAME="oficina-auth-lambda"
       LAMBDA_FUNCTION_NAME_DEFAULT="oficina-auth-lambda-lab"
       LAMBDA_ARTIFACT_PREFIX_DEFAULT="oficina/lab/lambda/oficina-auth-lambda"
+      LAMBDA_EXTRA_ENV_JSON_DEFAULT="{}"
       LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT="POST /auth"
       LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /auth;POST /auth/token;GET /.well-known/openid-configuration;GET /.well-known/jwks.json"
       LAMBDA_ENV_PREFIX="AUTH"
@@ -42,6 +43,7 @@ load_lambda_module() {
       LAMBDA_RELEASE_BASENAME="oficina-notificacao-lambda"
       LAMBDA_FUNCTION_NAME_DEFAULT="oficina-notificacao-lambda-lab"
       LAMBDA_ARTIFACT_PREFIX_DEFAULT="oficina/lab/lambda/oficina-notificacao-lambda"
+      LAMBDA_EXTRA_ENV_JSON_DEFAULT='{"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_MOCK":"true"}'
       LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT="POST /notificacoes/email"
       LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /notificacoes/email"
       LAMBDA_ENV_PREFIX="NOTIFICACAO"
