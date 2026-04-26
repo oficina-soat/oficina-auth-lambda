@@ -351,7 +351,9 @@ jobs:
           IMPACTED_MODULES: ${{ needs.detect_release_state.outputs.impacted_modules_csv }}
         run: |
           source ./scripts/lambda-modules.sh
-          mkdir -p target/release-assets target/github-release
+          release_assets_staging_dir=".tmp/release-assets"
+          rm -rf "${release_assets_staging_dir}"
+          mkdir -p "${release_assets_staging_dir}" target/github-release
 
           if [[ -z "${IMPACTED_MODULES}" ]]; then
             echo "Nenhum modulo impactado detectado para a release ${LAMBDA_RELEASE_TAG}" >&2
@@ -361,8 +363,11 @@ jobs:
           for module in ${IMPACTED_MODULES//,/ }; do
             ./scripts/build-native-lambda.sh "${module}" -B -DskipTests -DskipITs=true -DfailIfNoTests=false
             asset_name="$(lambda_release_asset_name "${module}" "${LAMBDA_RELEASE_VERSION}" "${LAMBDA_ARCHITECTURE}")"
-            cp "${module}/target/function.zip" "target/release-assets/${asset_name}"
+            cp "${module}/target/function.zip" "${release_assets_staging_dir}/${asset_name}"
           done
+
+          mkdir -p target/release-assets
+          cp "${release_assets_staging_dir}"/*.zip target/release-assets/
 
           sha256sum target/release-assets/*.zip > target/release-assets/checksums.txt
 
