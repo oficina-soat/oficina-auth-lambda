@@ -2,32 +2,125 @@ name: Redeploy Lambda Lab
 
 on:
   workflow_dispatch:
+    inputs:
+      lambda_target:
+        description: "Lambda alvo do redeploy"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - auth-lambda
+          - notificacao-lambda
 
 concurrency:
   group: lab-lambda
   cancel-in-progress: false
 
 jobs:
-  resolve_lambda_release:
-    if: github.ref_name == 'main'
-    name: resolve-lambda-release
+  redeploy_lambda:
+    if: >
+      github.ref_name == 'main' &&
+      (
+        inputs.lambda_target == 'all' ||
+        inputs.lambda_target == matrix.module
+      )
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - auth-lambda
+          - notificacao-lambda
     permissions:
       contents: read
-    outputs:
-      current_version: ${{ steps.version.outputs.current_version }}
-      release_asset: ${{ steps.version.outputs.release_asset }}
-      release_tag: ${{ steps.version.outputs.release_tag }}
+    environment:
+      name: lab
     env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AUTH_LAMBDA_ARTIFACT_PREFIX: ${{ vars.AUTH_LAMBDA_ARTIFACT_PREFIX || vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
+      AUTH_LAMBDA_ATTACH_VPC: ${{ vars.AUTH_LAMBDA_ATTACH_VPC || 'true' }}
+      AUTH_LAMBDA_EXTRA_ENV_JSON: ${{ vars.AUTH_LAMBDA_EXTRA_ENV_JSON || '{}' }}
+      AUTH_LAMBDA_FUNCTION_NAME: ${{ vars.AUTH_LAMBDA_FUNCTION_NAME || vars.LAMBDA_FUNCTION_NAME || 'oficina-auth-lambda-lab' }}
+      AUTH_LAMBDA_ROLE_ARN: ${{ secrets.AUTH_LAMBDA_ROLE_ARN || secrets.LAMBDA_ROLE_ARN }}
+      AUTH_LAMBDA_SECURITY_GROUP_NAME: ${{ vars.AUTH_LAMBDA_SECURITY_GROUP_NAME }}
+      AUTH_LAMBDA_SUBNET_IDS: ${{ vars.AUTH_LAMBDA_SUBNET_IDS || vars.LAMBDA_SUBNET_IDS }}
+      AUTH_LAMBDA_TIMEOUT: ${{ vars.AUTH_LAMBDA_TIMEOUT || vars.LAMBDA_TIMEOUT || '15' }}
+      AUTH_LAMBDA_VPC_ID: ${{ vars.AUTH_LAMBDA_VPC_ID || vars.LAMBDA_VPC_ID }}
+      AUTH_API_GATEWAY_ID: ${{ vars.AUTH_API_GATEWAY_ID || vars.API_GATEWAY_ID }}
+      AUTH_API_GATEWAY_NAME: ${{ vars.AUTH_API_GATEWAY_NAME || vars.API_GATEWAY_NAME || format('{0}-http-api', vars.EKS_CLUSTER_NAME || 'eks-lab') }}
+      AUTH_API_GATEWAY_ROUTE_KEY: ${{ vars.AUTH_API_GATEWAY_ROUTE_KEY || 'POST /auth' }}
+      AUTH_API_GATEWAY_ROUTE_KEYS: ${{ vars.AUTH_API_GATEWAY_ROUTE_KEYS || 'POST /auth;POST /auth/token;GET /.well-known/openid-configuration;GET /.well-known/jwks.json' }}
+      ATTACH_API_GATEWAY: ${{ vars.ATTACH_API_GATEWAY || 'true' }}
+      API_GATEWAY_PAYLOAD_FORMAT_VERSION: ${{ vars.API_GATEWAY_PAYLOAD_FORMAT_VERSION || '2.0' }}
+      API_GATEWAY_TIMEOUT_MILLISECONDS: ${{ vars.API_GATEWAY_TIMEOUT_MILLISECONDS || '30000' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      BOOTSTRAP_AUTH_DB_USER: ${{ vars.BOOTSTRAP_AUTH_DB_USER || 'true' }}
+      CI_RUNNER_PUBLIC_IP_URL: ${{ vars.CI_RUNNER_PUBLIC_IP_URL || 'https://checkip.amazonaws.com' }}
+      DB_INSTANCE_IDENTIFIER: ${{ vars.DB_INSTANCE_IDENTIFIER || vars.DB_IDENTIFIER || 'oficina-postgres-lab' }}
+      DB_NAME: ${{ vars.DB_NAME }}
+      DB_SECURITY_GROUP_IDS: ${{ vars.DB_SECURITY_GROUP_IDS }}
+      DB_SSLMODE: ${{ vars.DB_SSLMODE || 'require' }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'eks-lab' }}
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET || vars.TF_STATE_BUCKET }}
+      LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_MEMORY_SIZE: ${{ vars.LAMBDA_MEMORY_SIZE || '256' }}
+      LAMBDA_RUNTIME: ${{ vars.LAMBDA_RUNTIME || 'provided.al2023' }}
+      LAMBDA_SECRET_INJECTION_MODE: ${{ vars.LAMBDA_SECRET_INJECTION_MODE || 'env-vars' }}
+      MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
+      MASTER_DB_USER: ${{ vars.MASTER_DB_USER }}
+      MASTER_SECRET_ARN: ${{ vars.MASTER_SECRET_ARN }}
+      MP_JWT_VERIFY_PUBLICKEY: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY }}
+      MP_JWT_VERIFY_PUBLICKEY_LOCATION: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY_LOCATION }}
+      JWT_DIR: ${{ vars.JWT_DIR || '.tmp/jwt' }}
+      JWT_SECRET_KMS_KEY_ID: ${{ vars.JWT_SECRET_KMS_KEY_ID }}
+      JWT_SECRET_NAME: ${{ vars.JWT_SECRET_NAME || 'oficina/lab/jwt' }}
+      JWT_SECRET_PRIVATE_KEY_FIELD: ${{ vars.JWT_SECRET_PRIVATE_KEY_FIELD || 'privateKeyPem' }}
+      JWT_SECRET_PUBLIC_KEY_FIELD: ${{ vars.JWT_SECRET_PUBLIC_KEY_FIELD || 'publicKeyPem' }}
+      JWT_SECRET_SOURCE: ${{ vars.JWT_SECRET_SOURCE || 'aws-secrets-manager' }}
+      NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX: ${{ vars.NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-notificacao-lambda' }}
+      NOTIFICACAO_LAMBDA_ATTACH_VPC: ${{ vars.NOTIFICACAO_LAMBDA_ATTACH_VPC || 'false' }}
+      NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON: ${{ secrets.NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON || vars.NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON || '{}' }}
+      NOTIFICACAO_LAMBDA_FUNCTION_NAME: ${{ vars.NOTIFICACAO_LAMBDA_FUNCTION_NAME || 'oficina-notificacao-lambda-lab' }}
+      NOTIFICACAO_LAMBDA_ROLE_ARN: ${{ secrets.NOTIFICACAO_LAMBDA_ROLE_ARN || secrets.LAMBDA_ROLE_ARN }}
+      NOTIFICACAO_LAMBDA_SECURITY_GROUP_NAME: ${{ vars.NOTIFICACAO_LAMBDA_SECURITY_GROUP_NAME }}
+      NOTIFICACAO_LAMBDA_SUBNET_IDS: ${{ vars.NOTIFICACAO_LAMBDA_SUBNET_IDS }}
+      NOTIFICACAO_LAMBDA_TIMEOUT: ${{ vars.NOTIFICACAO_LAMBDA_TIMEOUT || vars.LAMBDA_TIMEOUT || '15' }}
+      NOTIFICACAO_LAMBDA_VPC_ID: ${{ vars.NOTIFICACAO_LAMBDA_VPC_ID }}
+      NOTIFICACAO_API_GATEWAY_ID: ${{ vars.NOTIFICACAO_API_GATEWAY_ID || vars.API_GATEWAY_ID }}
+      NOTIFICACAO_API_GATEWAY_NAME: ${{ vars.NOTIFICACAO_API_GATEWAY_NAME || vars.API_GATEWAY_NAME || format('{0}-http-api', vars.EKS_CLUSTER_NAME || 'eks-lab') }}
+      NOTIFICACAO_API_GATEWAY_ROUTE_KEY: ${{ vars.NOTIFICACAO_API_GATEWAY_ROUTE_KEY || 'POST /notificacoes/email' }}
+      NOTIFICACAO_API_GATEWAY_ROUTE_KEYS: ${{ vars.NOTIFICACAO_API_GATEWAY_ROUTE_KEYS || 'POST /notificacoes/email' }}
+      OFICINA_AUTH_AUDIENCE: ${{ vars.OFICINA_AUTH_AUDIENCE || 'oficina-app' }}
+      OFICINA_AUTH_ISSUER: ${{ vars.OFICINA_AUTH_ISSUER }}
+      OFICINA_AUTH_KEY_ID: ${{ vars.OFICINA_AUTH_KEY_ID || 'oficina-lab-rsa' }}
+      OFICINA_AUTH_SCOPE: ${{ vars.OFICINA_AUTH_SCOPE || 'oficina-app' }}
+      AUTH_DB_ALLOW_SCHEMA_CHANGES: ${{ vars.AUTH_DB_ALLOW_SCHEMA_CHANGES || 'false' }}
+      AUTH_DB_PASSWORD: ${{ secrets.AUTH_DB_PASSWORD }}
+      AUTH_DB_SECRET_KMS_KEY_ID: ${{ vars.AUTH_DB_SECRET_KMS_KEY_ID }}
+      AUTH_DB_SECRET_NAME: ${{ vars.AUTH_DB_SECRET_NAME || 'oficina/lab/database/auth-lambda' }}
+      AUTH_DB_USER: ${{ vars.AUTH_DB_USER || 'oficina_auth_lambda' }}
+      QUARKUS_DATASOURCE_JDBC_URL: ${{ secrets.QUARKUS_DATASOURCE_JDBC_URL }}
+      QUARKUS_DATASOURCE_PASSWORD: ${{ secrets.QUARKUS_DATASOURCE_PASSWORD }}
+      QUARKUS_DATASOURCE_USERNAME: ${{ secrets.QUARKUS_DATASOURCE_USERNAME }}
+      REGENERATE_JWT: ${{ vars.REGENERATE_JWT || 'false' }}
+      ROTATE_AUTH_DB_PASSWORD: ${{ vars.ROTATE_AUTH_DB_PASSWORD || 'false' }}
+      ROTATE_JWT_SECRET: ${{ vars.ROTATE_JWT_SECRET || 'false' }}
+      SMALLRYE_JWT_SIGN_KEY: ${{ secrets.SMALLRYE_JWT_SIGN_KEY }}
+      SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
+      STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER: ${{ vars.STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER || 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Resolve Lambda release
+      - name: Resolve release asset
         id: version
         shell: bash
         run: |
+          source ./scripts/lambda-modules.sh
           current_version="$(
             sed -n '0,/<version>[[:space:]]*/{
               s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
@@ -39,178 +132,28 @@ jobs:
             exit 1
           fi
 
+          release_asset="$(lambda_release_asset_name "${{ matrix.module }}" "${current_version}" "${LAMBDA_ARCHITECTURE}")"
+
           {
             echo "current_version=${current_version}"
-            echo "release_asset=oficina-auth-lambda-${current_version}-${LAMBDA_ARCHITECTURE}.zip"
+            echo "release_asset=${release_asset}"
             echo "release_tag=v${current_version}"
           } >> "${GITHUB_OUTPUT}"
 
-  download_release_lambda:
-    if: github.ref_name == 'main'
-    name: download-release-lambda
-    runs-on: ubuntu-latest
-    needs: resolve_lambda_release
-    permissions:
-      contents: read
-    environment:
-      name: lab
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
-      LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET || vars.TF_STATE_BUCKET }}
-      LAMBDA_ARTIFACT_PREFIX: ${{ vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
-      LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
-      LAMBDA_ARTIFACT_VERSION: ${{ needs.resolve_lambda_release.outputs.current_version }}
-      LAMBDA_RELEASE_ASSET: ${{ needs.resolve_lambda_release.outputs.release_asset }}
-      LAMBDA_RELEASE_TAG: ${{ needs.resolve_lambda_release.outputs.release_tag }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Download Lambda package from GitHub release
+      - name: Download release asset
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p target/github-release
-          gh release download "${LAMBDA_RELEASE_TAG}" \
-            --pattern "${LAMBDA_RELEASE_ASSET}" \
-            --dir target/github-release \
+          source ./scripts/lambda-modules.sh
+          load_lambda_module "${{ matrix.module }}"
+          mkdir -p "target/github-release/${{ matrix.module }}" "${{ matrix.module }}/target"
+          gh release download "${{ steps.version.outputs.release_tag }}" \
+            --pattern "${{ steps.version.outputs.release_asset }}" \
+            --dir "target/github-release/${{ matrix.module }}" \
             --clobber
-          cp "target/github-release/${LAMBDA_RELEASE_ASSET}" target/function.zip
-          cp "target/github-release/${LAMBDA_RELEASE_ASSET}" target/oficina-auth-lambda-native.zip
-
-      - name: Configure AWS credentials
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
-        uses: aws-actions/configure-aws-credentials@v6.1.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-
-      - name: Store GitHub release package in S3
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
-        run: |
-          chmod +x ./scripts/s3-native-lambda-artifact.sh
-          ./scripts/s3-native-lambda-artifact.sh store
-
-      - name: Skip S3 native package store
-        if: env.LAMBDA_ARTIFACT_BUCKET == ''
-        run: echo "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; pacote ficou somente no GitHub Release."
-
-      - name: Upload Lambda package
-        uses: actions/upload-artifact@v6
-        with:
-          name: lambda-native-package
-          path: |
-            target/function.zip
-            target/oficina-auth-lambda-native.zip
-            target/github-release/${{ needs.resolve_lambda_release.outputs.release_asset }}
-          if-no-files-found: error
-
-  deploy_lambda:
-    if: github.ref_name == 'main'
-    name: deploy-lambda
-    runs-on: ubuntu-latest
-    needs:
-      - resolve_lambda_release
-      - download_release_lambda
-    permissions:
-      contents: read
-    environment:
-      name: lab
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'eks-lab' }}
-      DB_INSTANCE_IDENTIFIER: ${{ vars.DB_INSTANCE_IDENTIFIER || vars.DB_IDENTIFIER || 'oficina-postgres-lab' }}
-      DB_NAME: ${{ vars.DB_NAME }}
-      DB_SSLMODE: ${{ vars.DB_SSLMODE || 'require' }}
-      DB_SECURITY_GROUP_IDS: ${{ vars.DB_SECURITY_GROUP_IDS }}
-      MASTER_SECRET_ARN: ${{ vars.MASTER_SECRET_ARN }}
-      MASTER_DB_USER: ${{ vars.MASTER_DB_USER }}
-      MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
-      BOOTSTRAP_AUTH_DB_USER: ${{ vars.BOOTSTRAP_AUTH_DB_USER || 'true' }}
-      AUTH_DB_USER: ${{ vars.AUTH_DB_USER || 'oficina_auth_lambda' }}
-      AUTH_DB_PASSWORD: ${{ secrets.AUTH_DB_PASSWORD }}
-      AUTH_DB_ALLOW_SCHEMA_CHANGES: ${{ vars.AUTH_DB_ALLOW_SCHEMA_CHANGES || 'false' }}
-      STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER: ${{ vars.STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER || 'true' }}
-      AUTH_DB_SECRET_NAME: ${{ vars.AUTH_DB_SECRET_NAME || 'oficina/lab/database/auth-lambda' }}
-      AUTH_DB_SECRET_KMS_KEY_ID: ${{ vars.AUTH_DB_SECRET_KMS_KEY_ID }}
-      ROTATE_AUTH_DB_PASSWORD: ${{ vars.ROTATE_AUTH_DB_PASSWORD || 'false' }}
-      AUTO_ALLOW_DEPLOY_RUNNER_CIDR: ${{ vars.AUTO_ALLOW_DEPLOY_RUNNER_CIDR || 'true' }}
-      CI_RUNNER_PUBLIC_IP_URL: ${{ vars.CI_RUNNER_PUBLIC_IP_URL || 'https://checkip.amazonaws.com' }}
-      LAMBDA_FUNCTION_NAME: ${{ vars.LAMBDA_FUNCTION_NAME || 'oficina-auth-lambda-lab' }}
-      LAMBDA_RUNTIME: ${{ vars.LAMBDA_RUNTIME || 'provided.al2023' }}
-      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
-      LAMBDA_MEMORY_SIZE: ${{ vars.LAMBDA_MEMORY_SIZE || '256' }}
-      LAMBDA_TIMEOUT: ${{ vars.LAMBDA_TIMEOUT || '15' }}
-      LAMBDA_VPC_ID: ${{ vars.LAMBDA_VPC_ID }}
-      LAMBDA_SUBNET_IDS: ${{ vars.LAMBDA_SUBNET_IDS }}
-      LAMBDA_SECURITY_GROUP_NAME: ${{ vars.LAMBDA_SECURITY_GROUP_NAME }}
-      ATTACH_API_GATEWAY: ${{ vars.ATTACH_API_GATEWAY || 'true' }}
-      API_GATEWAY_ID: ${{ vars.API_GATEWAY_ID }}
-      API_GATEWAY_NAME: ${{ vars.API_GATEWAY_NAME || format('{0}-http-api', vars.EKS_CLUSTER_NAME || 'eks-lab') }}
-      API_GATEWAY_ROUTE_KEY: ${{ vars.API_GATEWAY_ROUTE_KEY || 'POST /auth' }}
-      API_GATEWAY_ROUTE_KEYS: ${{ vars.API_GATEWAY_ROUTE_KEYS }}
-      OFICINA_AUTH_ISSUER: ${{ vars.OFICINA_AUTH_ISSUER }}
-      OFICINA_AUTH_AUDIENCE: ${{ vars.OFICINA_AUTH_AUDIENCE || 'oficina-app' }}
-      OFICINA_AUTH_SCOPE: ${{ vars.OFICINA_AUTH_SCOPE || 'oficina-app' }}
-      OFICINA_AUTH_KEY_ID: ${{ vars.OFICINA_AUTH_KEY_ID || 'oficina-lab-rsa' }}
-      API_GATEWAY_PAYLOAD_FORMAT_VERSION: ${{ vars.API_GATEWAY_PAYLOAD_FORMAT_VERSION || '2.0' }}
-      API_GATEWAY_TIMEOUT_MILLISECONDS: ${{ vars.API_GATEWAY_TIMEOUT_MILLISECONDS || '30000' }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
-      LAMBDA_ROLE_ARN: ${{ secrets.LAMBDA_ROLE_ARN }}
-      QUARKUS_DATASOURCE_USERNAME: ${{ secrets.QUARKUS_DATASOURCE_USERNAME }}
-      QUARKUS_DATASOURCE_PASSWORD: ${{ secrets.QUARKUS_DATASOURCE_PASSWORD }}
-      QUARKUS_DATASOURCE_JDBC_URL: ${{ secrets.QUARKUS_DATASOURCE_JDBC_URL }}
-      MP_JWT_VERIFY_PUBLICKEY: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY }}
-      MP_JWT_VERIFY_PUBLICKEY_LOCATION: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY_LOCATION }}
-      SMALLRYE_JWT_SIGN_KEY: ${{ secrets.SMALLRYE_JWT_SIGN_KEY }}
-      SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
-      LAMBDA_SECRET_INJECTION_MODE: ${{ vars.LAMBDA_SECRET_INJECTION_MODE || 'env-vars' }}
-      JWT_SECRET_SOURCE: ${{ vars.JWT_SECRET_SOURCE || 'aws-secrets-manager' }}
-      JWT_SECRET_NAME: ${{ vars.JWT_SECRET_NAME || 'oficina/lab/jwt' }}
-      JWT_SECRET_PRIVATE_KEY_FIELD: ${{ vars.JWT_SECRET_PRIVATE_KEY_FIELD || 'privateKeyPem' }}
-      JWT_SECRET_PUBLIC_KEY_FIELD: ${{ vars.JWT_SECRET_PUBLIC_KEY_FIELD || 'publicKeyPem' }}
-      JWT_SECRET_KMS_KEY_ID: ${{ vars.JWT_SECRET_KMS_KEY_ID }}
-      ROTATE_JWT_SECRET: ${{ vars.ROTATE_JWT_SECRET || 'false' }}
-      JWT_DIR: ${{ vars.JWT_DIR || '.tmp/jwt' }}
-      REGENERATE_JWT: ${{ vars.REGENERATE_JWT || 'false' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Download Lambda package
-        uses: actions/download-artifact@v7
-        with:
-          name: lambda-native-package
-          path: target
-
-      - name: Validate deploy inputs
-        shell: bash
-        run: |
-          missing=()
-          [[ -n "${AWS_ACCESS_KEY_ID}" ]] || missing+=("AWS_ACCESS_KEY_ID")
-          [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || missing+=("AWS_SECRET_ACCESS_KEY")
-          [[ -n "${LAMBDA_FUNCTION_NAME}" ]] || missing+=("LAMBDA_FUNCTION_NAME")
-          [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${API_GATEWAY_ID}" || -n "${API_GATEWAY_NAME}" ]] || missing+=("API_GATEWAY_ID|API_GATEWAY_NAME")
-          [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${API_GATEWAY_ROUTE_KEY}" ]] || missing+=("API_GATEWAY_ROUTE_KEY")
-
-          if [[ "${JWT_SECRET_SOURCE}" == "env-vars" && -z "${MP_JWT_VERIFY_PUBLICKEY}" && -z "${MP_JWT_VERIFY_PUBLICKEY_LOCATION}" ]]; then
-            missing+=("MP_JWT_VERIFY_PUBLICKEY|MP_JWT_VERIFY_PUBLICKEY_LOCATION")
-          fi
-
-          if [[ "${JWT_SECRET_SOURCE}" == "env-vars" && -z "${SMALLRYE_JWT_SIGN_KEY}" && -z "${SMALLRYE_JWT_SIGN_KEY_LOCATION}" ]]; then
-            missing+=("SMALLRYE_JWT_SIGN_KEY|SMALLRYE_JWT_SIGN_KEY_LOCATION")
-          fi
-
-          if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "Missing GitHub Environment values for environment 'lab': ${missing[*]}" >&2
-            exit 1
-          fi
+          cp "target/github-release/${{ matrix.module }}/${{ steps.version.outputs.release_asset }}" "${{ matrix.module }}/target/function.zip"
+          cp "target/github-release/${{ matrix.module }}/${{ steps.version.outputs.release_asset }}" "${{ matrix.module }}/target/${LAMBDA_NAMED_ARTIFACT_FILENAME}"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.1.0
@@ -219,9 +162,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Store release asset in S3
+        if: env.LAMBDA_ARTIFACT_BUCKET != ''
+        run: |
+          chmod +x ./scripts/*.sh
+          ./scripts/s3-native-lambda-artifact.sh "${{ matrix.module }}" store
 
       - name: Deploy native Lambda
-        shell: bash
         run: |
-          chmod +x ./scripts/deploy-native-lambda.sh
-          ./scripts/deploy-native-lambda.sh
+          chmod +x ./scripts/*.sh
+          ./scripts/deploy-native-lambda.sh "${{ matrix.module }}"

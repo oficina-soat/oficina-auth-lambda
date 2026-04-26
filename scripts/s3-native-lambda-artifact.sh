@@ -4,13 +4,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-COMMAND="${1:-}"
+source "${SCRIPT_DIR}/lambda-modules.sh"
+
+MODULE="${1:-${LAMBDA_MODULE:-}}"
+COMMAND="${2:-}"
+
+if [[ -z "${MODULE}" || -z "${COMMAND}" ]]; then
+  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda> restore|store" >&2
+  exit 1
+fi
+
+load_lambda_module "${MODULE}" || {
+  echo "Modulo de Lambda invalido: ${MODULE}" >&2
+  exit 1
+}
+
 AWS_REGION="${AWS_REGION:-us-east-1}"
 LAMBDA_ARTIFACT_BUCKET="${LAMBDA_ARTIFACT_BUCKET:-${TF_STATE_BUCKET:-}}"
-LAMBDA_ARTIFACT_PREFIX="${LAMBDA_ARTIFACT_PREFIX:-oficina/lab/lambda/oficina-auth-lambda}"
+module_artifact_prefix_var="${LAMBDA_ENV_PREFIX}_LAMBDA_ARTIFACT_PREFIX"
+LAMBDA_ARTIFACT_PREFIX="${!module_artifact_prefix_var:-${LAMBDA_ARTIFACT_PREFIX:-${LAMBDA_ARTIFACT_PREFIX_DEFAULT}}}"
 LAMBDA_ARTIFACT_QUALIFIER="${LAMBDA_ARTIFACT_QUALIFIER:-${LAMBDA_ARCHITECTURE:-x86_64}}"
-FUNCTION_ARTIFACT_PATH="${FUNCTION_ARTIFACT_PATH:-target/function.zip}"
-NAMED_ARTIFACT_PATH="${NAMED_ARTIFACT_PATH:-target/oficina-auth-lambda-native.zip}"
+FUNCTION_ARTIFACT_PATH="${FUNCTION_ARTIFACT_PATH:-${LAMBDA_BUILD_DIR}/function.zip}"
+NAMED_ARTIFACT_PATH="${NAMED_ARTIFACT_PATH:-${LAMBDA_BUILD_DIR}/${LAMBDA_NAMED_ARTIFACT_FILENAME}}"
 
 pom_version() {
   local pom="${REPO_ROOT}/pom.xml"
@@ -26,22 +41,6 @@ pom_version() {
 
 LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${LAMBDA_RELEASE_VERSION:-$(pom_version)}}"
 LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${GITHUB_SHA:-}}"
-
-usage() {
-  cat <<EOF
-Uso:
-  $(basename "$0") restore|store
-
-Variaveis:
-  AWS_REGION
-  LAMBDA_ARTIFACT_BUCKET ou TF_STATE_BUCKET (opcional para restore; obrigatorio para store)
-  LAMBDA_ARTIFACT_PREFIX       Default: oficina/lab/lambda/oficina-auth-lambda
-  LAMBDA_ARTIFACT_VERSION      Default: project.version do pom.xml; fallback: GITHUB_SHA
-  LAMBDA_ARTIFACT_QUALIFIER    Default: LAMBDA_ARCHITECTURE ou x86_64
-  FUNCTION_ARTIFACT_PATH       Default: target/function.zip
-  NAMED_ARTIFACT_PATH          Default: target/oficina-auth-lambda-native.zip
-EOF
-}
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -122,7 +121,7 @@ restore_artifacts() {
   require_non_empty "${LAMBDA_ARTIFACT_VERSION}" "LAMBDA_ARTIFACT_VERSION"
 
   function_uri="$(s3_uri function.zip)"
-  named_uri="$(s3_uri oficina-auth-lambda-native.zip)"
+  named_uri="$(s3_uri "${LAMBDA_NAMED_ARTIFACT_FILENAME}")"
 
   if ! object_exists function.zip; then
     log "Pacote nativo nao encontrado em ${function_uri}"
@@ -130,7 +129,7 @@ restore_artifacts() {
     return
   fi
 
-  if ! object_exists oficina-auth-lambda-native.zip; then
+  if ! object_exists "${LAMBDA_NAMED_ARTIFACT_FILENAME}"; then
     log "Pacote nativo nomeado nao encontrado em ${named_uri}"
     set_output restored false
     return
@@ -160,15 +159,10 @@ store_artifacts() {
   fi
 
   aws --region "${AWS_REGION}" s3 cp "${FUNCTION_ARTIFACT_PATH}" "$(s3_uri function.zip)"
-  aws --region "${AWS_REGION}" s3 cp "${NAMED_ARTIFACT_PATH}" "$(s3_uri oficina-auth-lambda-native.zip)"
+  aws --region "${AWS_REGION}" s3 cp "${NAMED_ARTIFACT_PATH}" "$(s3_uri "${LAMBDA_NAMED_ARTIFACT_FILENAME}")"
 
   log "Pacote nativo armazenado em s3://$(artifact_key_prefix)"
 }
-
-if [[ "${COMMAND}" == "-h" || "${COMMAND}" == "--help" || -z "${COMMAND}" ]]; then
-  usage
-  exit 0
-fi
 
 require_non_empty "${AWS_REGION}" "AWS_REGION"
 
@@ -180,7 +174,7 @@ case "${COMMAND}" in
     store_artifacts
     ;;
   *)
-    usage >&2
+    echo "Comando invalido: ${COMMAND}" >&2
     exit 1
     ;;
 esac

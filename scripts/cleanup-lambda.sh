@@ -1,41 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lambda-modules.sh"
+
+MODULE="${1:-${LAMBDA_MODULE:-}}"
+if [[ -z "${MODULE}" ]]; then
+  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda>" >&2
+  exit 1
+fi
+
+load_lambda_module "${MODULE}" || {
+  echo "Modulo de Lambda invalido: ${MODULE}" >&2
+  exit 1
+}
+
+pick_module_var() {
+  local suffix="$1"
+  local generic_name="$2"
+  local default_value="$3"
+  local module_var_name="${LAMBDA_ENV_PREFIX}_${suffix}"
+  local value="${!module_var_name:-}"
+
+  if [[ -z "${value}" && -n "${generic_name}" ]]; then
+    value="${!generic_name:-}"
+  fi
+
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+    return
+  fi
+
+  printf '%s' "${default_value}"
+}
+
 AWS_REGION="${AWS_REGION:-us-east-1}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-eks-lab}"
 DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
 DB_SECURITY_GROUP_IDS="${DB_SECURITY_GROUP_IDS:-}"
 DB_PORT="${DB_PORT:-}"
-LAMBDA_FUNCTION_NAME="${LAMBDA_FUNCTION_NAME:-oficina-auth-lambda-lab}"
-LAMBDA_VPC_ID="${LAMBDA_VPC_ID:-}"
-LAMBDA_SECURITY_GROUP_NAME="${LAMBDA_SECURITY_GROUP_NAME:-${LAMBDA_FUNCTION_NAME}-sg}"
-LAMBDA_LOG_GROUP_NAME="${LAMBDA_LOG_GROUP_NAME:-/aws/lambda/${LAMBDA_FUNCTION_NAME}}"
+LAMBDA_FUNCTION_NAME="$(pick_module_var LAMBDA_FUNCTION_NAME LAMBDA_FUNCTION_NAME "${LAMBDA_FUNCTION_NAME_DEFAULT}")"
+LAMBDA_VPC_ID="$(pick_module_var LAMBDA_VPC_ID LAMBDA_VPC_ID "")"
+LAMBDA_ATTACH_VPC="$(pick_module_var LAMBDA_ATTACH_VPC "" "${LAMBDA_ATTACH_VPC_DEFAULT}")"
+LAMBDA_SECURITY_GROUP_NAME="$(pick_module_var LAMBDA_SECURITY_GROUP_NAME LAMBDA_SECURITY_GROUP_NAME "${LAMBDA_FUNCTION_NAME}-sg")"
+LAMBDA_LOG_GROUP_NAME="$(pick_module_var LAMBDA_LOG_GROUP_NAME LAMBDA_LOG_GROUP_NAME "/aws/lambda/${LAMBDA_FUNCTION_NAME}")"
 NETWORK_INTERFACE_WAIT_SECONDS="${NETWORK_INTERFACE_WAIT_SECONDS:-600}"
 NETWORK_INTERFACE_POLL_SECONDS="${NETWORK_INTERFACE_POLL_SECONDS:-15}"
-
-usage() {
-  cat <<EOF
-Uso:
-  $(basename "$0")
-
-Remove apenas recursos operacionais da Lambda:
-  - funcao Lambda
-  - log group /aws/lambda/<funcao>
-  - security group dedicado da Lambda, quando estiver sem ENIs
-  - regras de entrada no security group do RDS que apontam para o SG da Lambda
-
-Variaveis principais:
-  AWS_REGION
-  EKS_CLUSTER_NAME
-  DB_INSTANCE_IDENTIFIER
-  DB_SECURITY_GROUP_IDS      Lista CSV ou JSON, opcional
-  DB_PORT                    Porta do banco, opcional
-  LAMBDA_FUNCTION_NAME
-  LAMBDA_VPC_ID              Override da VPC, opcional
-  LAMBDA_SECURITY_GROUP_NAME Default: <LAMBDA_FUNCTION_NAME>-sg
-  LAMBDA_LOG_GROUP_NAME      Default: /aws/lambda/<LAMBDA_FUNCTION_NAME>
-EOF
-}
 
 log() {
   printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -89,6 +99,10 @@ resolve_vpc_id() {
     return
   fi
 
+  if [[ "${LAMBDA_ATTACH_VPC}" != "true" ]]; then
+    return
+  fi
+
   aws_json eks describe-cluster \
     --name "${EKS_CLUSTER_NAME}" \
     --query 'cluster.resourcesVpcConfig.vpcId' 2>/dev/null |
@@ -128,6 +142,10 @@ resolve_lambda_security_group_id() {
 resolve_db_security_groups_and_port() {
   DB_SECURITY_GROUP_IDS="$(normalize_list "${DB_SECURITY_GROUP_IDS}")"
 
+  if [[ "${LAMBDA_USES_DATABASE}" != "true" ]]; then
+    return
+  fi
+
   if [[ -n "${DB_SECURITY_GROUP_IDS}" && -n "${DB_PORT}" ]]; then
     return
   fi
@@ -150,6 +168,11 @@ resolve_db_security_groups_and_port() {
 
 revoke_db_ingress_from_lambda() {
   local lambda_sg_id="$1"
+
+  if [[ "${LAMBDA_USES_DATABASE}" != "true" ]]; then
+    log "Modulo ${LAMBDA_MODULE} nao depende de RDS; revogacao de ingress ignorada"
+    return
+  fi
 
   resolve_db_security_groups_and_port
 
@@ -266,11 +289,6 @@ delete_lambda_security_group() {
     exit "${status}"
   fi
 }
-
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
 
 require_cmd aws
 require_cmd jq

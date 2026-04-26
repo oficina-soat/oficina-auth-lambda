@@ -1,5 +1,5 @@
 target/
 .idea/
 .DS_Store
-src/main/resources/jwt/privateKey.pem
-src/main/resources/jwt/publicKey.pem
+auth-lambda/src/main/resources/jwt/privateKey.pem
+auth-lambda/src/main/resources/jwt/publicKey.pem
