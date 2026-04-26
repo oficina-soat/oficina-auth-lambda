@@ -20,11 +20,7 @@ concurrency:
 jobs:
   redeploy_lambda:
     if: >
-      github.ref_name == 'main' &&
-      (
-        inputs.lambda_target == 'all' ||
-        inputs.lambda_target == matrix.module
-      )
+      github.ref_name == 'main'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -114,9 +110,11 @@ jobs:
       STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER: ${{ vars.STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER || 'true' }}
     steps:
       - name: Checkout
+        if: ${{ inputs.lambda_target == 'all' || inputs.lambda_target == matrix.module }}
         uses: actions/checkout@v5
 
       - name: Resolve release asset
+        if: ${{ inputs.lambda_target == 'all' || inputs.lambda_target == matrix.module }}
         id: version
         shell: bash
         run: |
@@ -141,6 +139,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Download release asset
+        if: ${{ inputs.lambda_target == 'all' || inputs.lambda_target == matrix.module }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -156,6 +155,7 @@ jobs:
           cp "target/github-release/${{ matrix.module }}/${{ steps.version.outputs.release_asset }}" "${{ matrix.module }}/target/${LAMBDA_NAMED_ARTIFACT_FILENAME}"
 
       - name: Configure AWS credentials
+        if: ${{ inputs.lambda_target == 'all' || inputs.lambda_target == matrix.module }}
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -164,12 +164,13 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Store release asset in S3
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
+        if: ${{ (inputs.lambda_target == 'all' || inputs.lambda_target == matrix.module) && env.LAMBDA_ARTIFACT_BUCKET != '' }}
         run: |
           chmod +x ./scripts/*.sh
           ./scripts/s3-native-lambda-artifact.sh "${{ matrix.module }}" store
 
       - name: Deploy native Lambda
+        if: ${{ inputs.lambda_target == 'all' || inputs.lambda_target == matrix.module }}
         run: |
           chmod +x ./scripts/*.sh
           ./scripts/deploy-native-lambda.sh "${{ matrix.module }}"

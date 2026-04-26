@@ -443,11 +443,7 @@ jobs:
       github.event_name == 'push' &&
       github.ref_name == 'main' &&
       needs.detect_release_state.outputs.deploy_needed == 'true' &&
-      needs.build_native_release_assets.result == 'success' &&
-      (
-        (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') ||
-        (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true')
-      )
+      needs.build_native_release_assets.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -535,15 +531,18 @@ jobs:
       SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
     steps:
       - name: Checkout
+        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
         uses: actions/checkout@v5
 
       - name: Download native packages
+        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
         uses: actions/download-artifact@v7
         with:
           name: lambda-native-packages
           path: .
 
       - name: Validate deploy inputs
+        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
         shell: bash
         run: |
           missing=()
@@ -558,6 +557,7 @@ jobs:
           fi
 
       - name: Configure AWS credentials
+        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -566,6 +566,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Deploy native Lambda
+        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
         run: |
           chmod +x ./scripts/*.sh
           ./scripts/deploy-native-lambda.sh "${{ matrix.module }}"
