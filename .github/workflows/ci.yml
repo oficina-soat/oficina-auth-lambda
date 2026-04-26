@@ -75,7 +75,7 @@ jobs:
             version_changed="true"
           fi
 
-          ./scripts/detect-lambda-impacts.sh "${base_ref}" HEAD >> "${GITHUB_OUTPUT}"
+          ./scripts/detect-lambda-impacts.sh "${base_ref}" HEAD
 
           release_tag="v${current_version}"
           auth_release_asset="$(lambda_release_asset_name auth-lambda "${current_version}" "${LAMBDA_ARCHITECTURE}")"

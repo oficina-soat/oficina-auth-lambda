@@ -107,8 +107,8 @@ set_output impacted_modules_json "${impacted_modules_json}"
 set_output any_impacted "${any_impacted}"
 set_output base_ref "${base_commit}"
 
-printf 'Base ref: %s\n' "${base_commit:-<indisponivel>}"
-printf 'Arquivos alterados:\n%s\n' "${changed_files:-<nenhum>}"
-printf 'Impacto auth-lambda: %s\n' "${auth_impacted}"
-printf 'Impacto notificacao-lambda: %s\n' "${notificacao_impacted}"
-printf 'Modulos impactados: %s\n' "${impacted_modules_csv:-<nenhum>}"
+printf 'Base ref: %s\n' "${base_commit:-<indisponivel>}" >&2
+printf 'Arquivos alterados:\n%s\n' "${changed_files:-<nenhum>}" >&2
+printf 'Impacto auth-lambda: %s\n' "${auth_impacted}" >&2
+printf 'Impacto notificacao-lambda: %s\n' "${notificacao_impacted}" >&2
+printf 'Modulos impactados: %s\n' "${impacted_modules_csv:-<nenhum>}" >&2
