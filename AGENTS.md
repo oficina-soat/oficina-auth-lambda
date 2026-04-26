@@ -40,6 +40,7 @@ Quando esses repositórios estiverem disponíveis, eles devem ser consultados pa
 ## Implementação
 
 - Use Java 25 de forma idiomática, mas sem introduzir complexidade desnecessária.
+- Prefira usar imports e evite nomes de classes totalmente qualificados no código, salvo quando houver conflito real de nomes.
 - Siga os padrões já presentes no código para nomes, organização de pacotes e estilo de testes.
 - Ao mexer em endpoints, preserve o contrato HTTP documentado no `README.md`, salvo quando a mudança exigir ajuste explícito de contrato.
 - Ao mexer em configuração, considere os perfis `dev`, `test` e `prod` já definidos em `src/main/resources/application.properties`.
