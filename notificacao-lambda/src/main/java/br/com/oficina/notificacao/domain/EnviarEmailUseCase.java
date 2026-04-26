@@ -3,8 +3,11 @@ package br.com.oficina.notificacao.domain;
 import io.quarkus.mailer.Mail;
 import io.quarkus.mailer.reactive.ReactiveMailer;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.BadRequestException;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+import java.util.Optional;
 
 @ApplicationScoped
 public class EnviarEmailUseCase {
@@ -12,8 +15,13 @@ public class EnviarEmailUseCase {
     private final ReactiveMailer mailer;
     private final String from;
 
+    @Inject
     public EnviarEmailUseCase(ReactiveMailer mailer,
-                              @ConfigProperty(name = "quarkus.mailer.from") String from) {
+                              @ConfigProperty(name = "quarkus.mailer.from") Optional<String> from) {
+        this(mailer, from.orElse(null));
+    }
+
+    EnviarEmailUseCase(ReactiveMailer mailer, String from) {
         this.mailer = mailer;
         this.from = from;
     }
