@@ -127,7 +127,7 @@ Defaults operacionais:
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
   - não anexa VPC por padrão
-  - aceita configuração extra por `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON`
+  - exige `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` com `QUARKUS_MAILER_FROM` e, quando `QUARKUS_MAILER_MOCK` não for `true`, também `QUARKUS_MAILER_HOST`
 
 Para configs específicas da função, os workflows e scripts usam nomes separados por Lambda, por exemplo:
 
@@ -140,6 +140,28 @@ Para configs específicas da função, os workflows e scripts usam nomes separad
 - `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON`
 
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
+
+Exemplo para envio real:
+
+```json
+{
+  "QUARKUS_MAILER_FROM": "noreply@oficina.example.com",
+  "QUARKUS_MAILER_HOST": "smtp.oficina.example.com",
+  "QUARKUS_MAILER_PORT": "587",
+  "QUARKUS_MAILER_START_TLS": "REQUIRED",
+  "QUARKUS_MAILER_USERNAME": "smtp-user",
+  "QUARKUS_MAILER_PASSWORD": "smtp-password"
+}
+```
+
+Exemplo para smoke test sem SMTP real:
+
+```json
+{
+  "QUARKUS_MAILER_FROM": "noreply@oficina.example.com",
+  "QUARKUS_MAILER_MOCK": "true"
+}
+```
 
 ## CI/CD
 

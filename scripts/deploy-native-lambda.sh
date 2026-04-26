@@ -929,6 +929,29 @@ validate_json_object() {
   fi
 }
 
+validate_notificacao_mailer_env() {
+  if [[ "${LAMBDA_MODULE}" != "notificacao-lambda" ]]; then
+    return
+  fi
+
+  local mailer_from
+  local mailer_host
+  local mailer_mock
+  mailer_from="$(trim "$(jq -r '."QUARKUS_MAILER_FROM" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+  mailer_host="$(trim "$(jq -r '."QUARKUS_MAILER_HOST" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+  mailer_mock="$(trim "$(jq -r '."QUARKUS_MAILER_MOCK" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+
+  if [[ -z "${mailer_from}" ]]; then
+    echo "NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON deve informar QUARKUS_MAILER_FROM para evitar falha 500 no envio de e-mail." >&2
+    exit 1
+  fi
+
+  if [[ "${mailer_mock}" != "true" && -z "${mailer_host}" ]]; then
+    echo "NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON deve informar QUARKUS_MAILER_HOST ou QUARKUS_MAILER_MOCK=true para inicializar a notificacao-lambda com seguranca." >&2
+    exit 1
+  fi
+}
+
 ensure_network_from_eks_if_needed() {
   if [[ -z "${LAMBDA_VPC_ID}" || -z "${LAMBDA_SUBNET_IDS}" ]] && [[ -n "${EKS_CLUSTER_NAME}" ]]; then
     log "VPC/subnets nao encontrados; tentando fallback pelo cluster EKS ${EKS_CLUSTER_NAME}"
@@ -952,6 +975,7 @@ require_non_empty "${AWS_REGION}" "AWS_REGION"
 require_non_empty "${LAMBDA_FUNCTION_NAME}" "LAMBDA_FUNCTION_NAME"
 
 validate_json_object "${LAMBDA_EXTRA_ENV_JSON}" "LAMBDA_EXTRA_ENV_JSON"
+validate_notificacao_mailer_env
 
 if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
   require_valid_lambda_secret_injection_mode

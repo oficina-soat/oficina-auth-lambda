@@ -142,6 +142,8 @@ Notificação:
 
 `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` serve para injetar configuração específica da função, como parâmetros do mailer. O deploy grava também `OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS` para conseguir remover chaves extras antigas em atualizações futuras.
 
+Para deploy válido da `notificacao-lambda`, o JSON deve incluir `QUARKUS_MAILER_FROM`. Quando `QUARKUS_MAILER_MOCK` não estiver em `true`, também deve incluir `QUARKUS_MAILER_HOST`.
+
 ## Redeploy manual
 
 `Redeploy Lambda Lab` aceita:
