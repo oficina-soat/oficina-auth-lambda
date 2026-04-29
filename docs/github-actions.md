@@ -126,6 +126,7 @@ Auth:
 - `OFICINA_AUTH_AUDIENCE`
 - `OFICINA_AUTH_SCOPE`
 - `OFICINA_AUTH_KEY_ID`
+- `AUTH_LAMBDA_EXTRA_ENV_JSON`
 
 Notificação:
 
@@ -141,6 +142,25 @@ Notificação:
 - `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON`
 
 `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` serve para injetar configuração específica da função, como parâmetros do mailer. O deploy grava também `OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS` para conseguir remover chaves extras antigas em atualizações futuras.
+
+Para observabilidade vendor-neutral da autenticação, `AUTH_LAMBDA_EXTRA_ENV_JSON` pode carregar, por exemplo:
+
+```json
+{
+  "OTEL_SERVICE_NAME": "oficina-auth-lambda",
+  "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=oficina,deployment.environment=lab",
+  "OTEL_EXPORTER_OTLP_ENDPOINT": "",
+  "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
+  "OTEL_TRACES_EXPORTER": "none",
+  "OTEL_METRICS_EXPORTER": "none",
+  "OTEL_LOGS_EXPORTER": "none",
+  "OFICINA_OBSERVABILITY_ENABLED": "true",
+  "OFICINA_OBSERVABILITY_JSON_LOGS_ENABLED": "true",
+  "OFICINA_OBSERVABILITY_METRICS_ENABLED": "true",
+  "OFICINA_OBSERVABILITY_TRACING_ENABLED": "true",
+  "DEPLOYMENT_ENVIRONMENT": "lab"
+}
+```
 
 Se esse valor não estiver configurado no GitHub Environment `lab`, os workflows usam o fallback:
 

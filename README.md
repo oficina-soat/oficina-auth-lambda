@@ -44,6 +44,37 @@ POST /notificacoes/email
 
 O endpoint de notificação não é mais publicado pelo mesmo runtime da autenticação. Cada Lambda responde apenas pelas suas próprias rotas.
 
+## Observabilidade
+
+O módulo `auth-lambda` já está preparado para observabilidade vendor-neutral:
+
+- `service.name=oficina-auth-lambda`
+- `service.namespace=oficina`
+- `deployment.environment=lab` por padrão
+- logs estruturados em JSON com correlação por `request_id`, `trace_id` e `span_id`
+- tracing distribuído com OpenTelemetry, incluindo span interno do fluxo de autenticação
+- métricas de autenticação:
+  - `auth_requests_total`
+  - `auth_failures_total`
+  - `auth_latency_ms`
+
+Env vars padronizadas:
+
+- `OTEL_SERVICE_NAME`
+- `OTEL_RESOURCE_ATTRIBUTES`
+- `OTEL_EXPORTER_OTLP_ENDPOINT`
+- `OTEL_EXPORTER_OTLP_PROTOCOL`
+- `OTEL_TRACES_EXPORTER`
+- `OTEL_METRICS_EXPORTER`
+- `OTEL_LOGS_EXPORTER`
+- `OFICINA_OBSERVABILITY_ENABLED`
+- `OFICINA_OBSERVABILITY_JSON_LOGS_ENABLED`
+- `OFICINA_OBSERVABILITY_METRICS_ENABLED`
+- `OFICINA_OBSERVABILITY_TRACING_ENABLED`
+- `DEPLOYMENT_ENVIRONMENT`
+
+No deploy da Lambda, esse bloco pode ser injetado em `AUTH_LAMBDA_EXTRA_ENV_JSON` quando for necessário sobrescrever os defaults do código.
+
 ## Versionamento e release
 
 - a versão continua única no repositório e fica no `pom.xml` pai

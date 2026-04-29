@@ -1,15 +1,24 @@
 package br.com.oficina.autenticacao.domain;
 
+import br.com.oficina.autenticacao.domain.exceptions.CpfInvalidoException;
 import br.com.oficina.autenticacao.domain.exceptions.CredenciaisObrigatoriasException;
 import br.com.oficina.autenticacao.domain.exceptions.SenhaInvalidaException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioInativoException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioNaoEncontradoException;
+import br.com.oficina.autenticacao.observability.AuthObservability;
+import io.opentelemetry.api.GlobalOpenTelemetry;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanKind;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
 import br.com.oficina.autenticacao.persistence.UsuarioEntity;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import io.quarkus.elytron.security.common.BcryptUtil;
 import io.smallrye.jwt.build.Jwt;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 
 import java.time.Duration;
@@ -39,11 +48,22 @@ public class AutenticarUsuarioUseCase {
     @ConfigProperty(name = "oficina.auth.key-id", defaultValue = DEFAULT_KEY_ID)
     String keyId;
 
+    @Inject
+    AuthObservability authObservability = AuthObservability.noop();
+
+    @Inject
+    Tracer tracer = GlobalOpenTelemetry.getTracer("oficina-auth-lambda");
+
     @Transactional
     public AutenticarUsuarioResponse execute(AutenticarUsuarioRequest req) {
+        authObservability.onAuthRequest();
         var timing = new AutenticacaoTiming();
+        Span span = tracer.spanBuilder("auth.authenticate")
+                .setSpanKind(SpanKind.INTERNAL)
+                .startSpan();
 
-        try {
+        try (Scope ignored = span.makeCurrent()) {
+            span.setAttribute("deployment.environment", configured(System.getenv("DEPLOYMENT_ENVIRONMENT"), "lab"));
             if (req == null
                     || req.cpf() == null || req.cpf().trim().isEmpty()
                     || req.password() == null || req.password().trim().isEmpty()) {
@@ -82,11 +102,15 @@ public class AutenticarUsuarioUseCase {
                     .keyId(configured(keyId, DEFAULT_KEY_ID))
                     .sign());
 
-            timing.success();
+            authObservability.onAuthSuccess(timing);
             return new AutenticarUsuarioResponse(accessToken, "Bearer", (int) TOKEN_TTL.toSeconds());
         } catch (RuntimeException exception) {
-            timing.failure(exception);
+            authObservability.onAuthFailure(classifyFailure(exception), timing, exception);
+            span.setStatus(StatusCode.ERROR);
+            span.recordException(exception);
             throw exception;
+        } finally {
+            span.end();
         }
     }
 
@@ -96,5 +120,21 @@ public class AutenticarUsuarioUseCase {
 
     private static String normalizeIssuer(String value) {
         return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+    }
+
+    private static String classifyFailure(RuntimeException exception) {
+        if (exception instanceof CredenciaisObrigatoriasException) {
+            return "missing_credentials";
+        }
+        if (exception instanceof CpfInvalidoException) {
+            return "invalid_cpf";
+        }
+        if (exception instanceof UsuarioNaoEncontradoException || exception instanceof SenhaInvalidaException) {
+            return "invalid_credentials";
+        }
+        if (exception instanceof UsuarioInativoException) {
+            return "inactive_user";
+        }
+        return "internal_error";
     }
 }

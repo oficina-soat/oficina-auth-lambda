@@ -5,6 +5,7 @@ import br.com.oficina.autenticacao.domain.exceptions.CredenciaisObrigatoriasExce
 import br.com.oficina.autenticacao.domain.exceptions.SenhaInvalidaException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioInativoException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioNaoEncontradoException;
+import br.com.oficina.autenticacao.observability.AuthObservability;
 import br.com.oficina.autenticacao.persistence.PapelEntity;
 import br.com.oficina.autenticacao.persistence.PessoaEntity;
 import br.com.oficina.autenticacao.persistence.UsuarioEntity;
@@ -31,12 +32,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AutenticarUsuarioUseCaseTest {
 
     private final AutenticarUsuarioUseCase useCase = new AutenticarUsuarioUseCase();
+    private final AuthObservability authObservability = mock(AuthObservability.class);
+
+    AutenticarUsuarioUseCaseTest() {
+        useCase.authObservability = authObservability;
+    }
 
     @Test
     void shouldRejectNullRequest() {
@@ -207,6 +214,27 @@ class AutenticarUsuarioUseCaseTest {
             long ttlInSeconds = expiresAtCaptor.getValue() - issuedAtCaptor.getValue();
             assertTrue(ttlInSeconds >= 3600 && ttlInSeconds <= 3601,
                     "Token TTL should be approximately 3600 seconds");
+            verify(authObservability).onAuthRequest();
+            verify(authObservability).onAuthSuccess(org.mockito.ArgumentMatchers.any());
+            verify(authObservability, never()).onAuthFailure(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        }
+    }
+
+    @Test
+    void shouldRegisterObservabilityFailureWhenCredentialsAreInvalid() {
+        UsuarioEntity usuario = usuario("84191404067", BcryptUtil.bcryptHash("correct-secret"), "admin");
+        PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
+
+        try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class)) {
+            panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
+
+            assertThrowsInChain(
+                    SenhaInvalidaException.class,
+                    () -> useCase.execute(new AutenticarUsuarioRequest("84191404067", "wrong-secret")));
+
+            verify(authObservability).onAuthRequest();
+            verify(authObservability).onAuthFailure(org.mockito.ArgumentMatchers.eq("invalid_credentials"), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
         }
     }
 

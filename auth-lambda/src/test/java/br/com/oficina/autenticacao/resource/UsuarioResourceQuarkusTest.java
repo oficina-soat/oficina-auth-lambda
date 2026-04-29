@@ -47,6 +47,7 @@ class UsuarioResourceQuarkusTest {
                 .then()
                 .statusCode(200)
                 .contentType(ContentType.JSON)
+                .header("X-Request-Id", org.hamcrest.Matchers.not(org.hamcrest.Matchers.isEmptyOrNullString()))
                 .extract()
                 .as(AutenticarUsuarioResponse.class);
 
