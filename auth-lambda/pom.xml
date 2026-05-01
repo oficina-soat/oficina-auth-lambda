@@ -7,7 +7,7 @@
     <parent>
         <groupId>br.com.oficina</groupId>
         <artifactId>oficina-lambda-parent</artifactId>
-        <version>1.0.20</version>
+        <version>1.0.21</version>
     </parent>
 
     <artifactId>auth-lambda</artifactId>
@@ -27,7 +27,19 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-logging-json</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
             <artifactId>quarkus-hibernate-orm-panache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-micrometer</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-opentelemetry</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

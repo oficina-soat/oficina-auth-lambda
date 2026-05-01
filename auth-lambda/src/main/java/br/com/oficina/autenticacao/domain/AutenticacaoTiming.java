@@ -1,12 +1,9 @@
 package br.com.oficina.autenticacao.domain;
 
-import org.jboss.logging.Logger;
-
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-final class AutenticacaoTiming {
-    private static final Logger LOG = Logger.getLogger(AutenticacaoTiming.class);
+public final class AutenticacaoTiming {
 
     private final long startedAt = System.nanoTime();
     private long cpfMs;
@@ -30,12 +27,24 @@ final class AutenticacaoTiming {
         return measure(step, elapsed -> jwtMs = elapsed);
     }
 
-    void success() {
-        log("success", "-");
+    public long totalMs() {
+        return elapsedMillis(startedAt);
     }
 
-    void failure(RuntimeException exception) {
-        log("failure", exception.getClass().getSimpleName());
+    public long cpfMs() {
+        return cpfMs;
+    }
+
+    public long dbMs() {
+        return dbMs;
+    }
+
+    public long bcryptMs() {
+        return bcryptMs;
+    }
+
+    public long jwtMs() {
+        return jwtMs;
     }
 
     private <T> T measure(Supplier<T> step, StepElapsed elapsedConsumer) {
@@ -45,21 +54,6 @@ final class AutenticacaoTiming {
         } finally {
             elapsedConsumer.accept(elapsedMillis(stepStartedAt));
         }
-    }
-
-    private void log(String outcome, String reason) {
-        if (!LOG.isInfoEnabled()) {
-            return;
-        }
-
-        LOG.infof("auth timing outcome=%s reason=%s totalMs=%d cpfMs=%d dbMs=%d bcryptMs=%d jwtMs=%d",
-                outcome,
-                reason,
-                elapsedMillis(startedAt),
-                cpfMs,
-                dbMs,
-                bcryptMs,
-                jwtMs);
     }
 
     private static long elapsedMillis(long startedAt) {
