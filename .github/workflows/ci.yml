@@ -382,6 +382,7 @@ jobs:
 
           modules_to_build=()
           modules_to_deploy=()
+          modules_requiring_version_bump=()
 
           for module in "${selected_modules[@]}"; do
             load_lambda_module "${module}"
@@ -414,6 +415,10 @@ jobs:
 
             if [[ "${need_build}" == "true" ]]; then
               modules_to_build+=("${module}")
+
+              if [[ "${function_exists}" == "true" ]]; then
+                modules_requiring_version_bump+=("${module}")
+              fi
             fi
 
             if [[ "${need_deploy}" == "true" ]]; then
@@ -434,10 +439,11 @@ jobs:
 
           modules_to_build_csv="$(csv_from_array "${modules_to_build[@]}")"
           modules_to_deploy_csv="$(csv_from_array "${modules_to_deploy[@]}")"
+          modules_requiring_version_bump_csv="$(csv_from_array "${modules_requiring_version_bump[@]}")"
           selected_modules_csv="$(csv_from_array "${selected_modules[@]}")"
           version_bump_required="false"
 
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == "main" && -n "${modules_to_build_csv}" && "${version_changed}" != "true" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == "main" && -n "${modules_requiring_version_bump_csv}" && "${version_changed}" != "true" ]]; then
             version_bump_required="true"
           fi
 
@@ -459,6 +465,7 @@ jobs:
           printf 'Modulos selecionados: %s\n' "${selected_modules_csv}"
           printf 'Modulos para build: %s\n' "${modules_to_build_csv:-<nenhum>}"
           printf 'Modulos para deploy: %s\n' "${modules_to_deploy_csv:-<nenhum>}"
+          printf 'Modulos que exigem incremento de versao: %s\n' "${modules_requiring_version_bump_csv:-<nenhum>}"
 
   require_version_bump:
     name: require-version-bump
@@ -470,7 +477,7 @@ jobs:
         shell: bash
         run: |
           printf '%s\n%s\n%s\n' \
-            "O estado da AWS exige novo build nativo para a versao ${{ needs.resolve_aws_state.outputs.current_version }}, mas o push em main nao incrementou project.version." \
+            "O estado da AWS exige novo build nativo para Lambda ja existente na versao ${{ needs.resolve_aws_state.outputs.current_version }}, mas o push em main nao incrementou project.version." \
             "Versao base: ${{ needs.resolve_aws_state.outputs.base_version || '<indisponivel>' }}" \
             "Incremente a versao no pom.xml antes de publicar novos artefatos versionados." >&2
           exit 1
