@@ -1,7 +1,17 @@
-name: CI/CD
+name: Build Deploy Lambda Lab
 
 on:
   workflow_dispatch:
+    inputs:
+      lambda_target:
+        description: "Lambda alvo"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - auth-lambda
+          - notificacao-lambda
   push:
     branches:
       - develop
@@ -11,45 +21,88 @@ concurrency:
   group: lab-lambda
   cancel-in-progress: false
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
-  detect_release_state:
-    name: detect-release-state
+  validate_develop:
+    name: validate-develop
+    if: github.event_name == 'push' && github.ref_name == 'develop'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    outputs:
-      auth_lambda_impacted: ${{ steps.detect.outputs.auth_lambda_impacted }}
-      auth_release_asset: ${{ steps.detect.outputs.auth_release_asset }}
-      base_version: ${{ steps.detect.outputs.base_version }}
-      current_version: ${{ steps.detect.outputs.current_version }}
-      deploy_needed: ${{ steps.detect.outputs.deploy_needed }}
-      impacted_modules_csv: ${{ steps.detect.outputs.impacted_modules_csv }}
-      impacted_modules_json: ${{ steps.detect.outputs.impacted_modules_json }}
-      notificacao_lambda_impacted: ${{ steps.detect.outputs.notificacao_lambda_impacted }}
-      notificacao_release_asset: ${{ steps.detect.outputs.notificacao_release_asset }}
-      release_exists: ${{ steps.detect.outputs.release_exists }}
-      release_tag: ${{ steps.detect.outputs.release_tag }}
-      version_changed: ${{ steps.detect.outputs.version_changed }}
-    env:
-      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Ensure scripts are executable
+        run: chmod +x ./mvnw ./scripts/*.sh
+
+      - name: Validate shell scripts
+        run: bash -n scripts/*.sh
+
+      - name: Run unit tests
+        run: ./mvnw -B test -DfailIfNoTests=false
+
+      - name: Run integration tests
+        run: ./mvnw -B verify -DskipITs=false -DfailIfNoTests=false
+
+  open_pull_request_to_main:
+    name: open-pull-request-to-main
+    if: github.event_name == 'push' && github.ref_name == 'develop'
+    runs-on: ubuntu-latest
+    needs: validate_develop
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Detect release state and module impacts
-        id: detect
+      - name: Open or update pull request to main
         shell: bash
         env:
+          BASE_BRANCH: main
           GH_TOKEN: ${{ github.token }}
+          HEAD_BRANCH: ${{ github.ref_name }}
         run: |
-          source ./scripts/lambda-modules.sh
+          set -euo pipefail
 
           extract_version() {
             sed -n '0,/<version>[[:space:]]*/{
               s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
             }' "$1" | head -n 1
+          }
+
+          find_existing_pr_number() {
+            local candidate_head=""
+            local pr_number=""
+
+            for candidate_head in "${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}" "${HEAD_BRANCH}"; do
+              pr_number="$(
+                gh pr list \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --base "${BASE_BRANCH}" \
+                  --head "${candidate_head}" \
+                  --state open \
+                  --json number \
+                  --jq '.[0].number // empty'
+              )"
+
+              if [[ -n "${pr_number}" ]]; then
+                printf '%s\n' "${pr_number}"
+                return
+              fi
+            done
           }
 
           current_version="$(extract_version pom.xml)"
@@ -58,10 +111,240 @@ jobs:
             exit 1
           fi
 
+          if [[ "${current_version}" == *-SNAPSHOT ]]; then
+            echo "Nao vou abrir PR de deploy para versao SNAPSHOT: ${current_version}" >&2
+            exit 1
+          fi
+
+          git fetch origin "${BASE_BRANCH}" "${HEAD_BRANCH}"
+          head_ref="${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"
+
+          if git merge-base "origin/${BASE_BRANCH}" "origin/${HEAD_BRANCH}" >/dev/null 2>&1; then
+            if git diff --quiet "origin/${BASE_BRANCH}...origin/${HEAD_BRANCH}" -- .; then
+              echo "Branch ${HEAD_BRANCH} nao possui diferencas de conteudo em relacao a ${BASE_BRANCH}; PR nao sera criado."
+              exit 0
+            fi
+          else
+            echo "Branches ${BASE_BRANCH} e ${HEAD_BRANCH} ainda nao possuem merge base; seguindo para a verificacao de PR existente."
+          fi
+
+          title="chore: promover develop para main"
+          body="$(printf '%s\n\n%s\n%s\n%s\n%s\n\n%s\n' \
+            "PR automatico aberto apos testes unitarios, integrados e validacao de scripts." \
+            "- Versao: ${current_version}" \
+            "- Branch origem: ${HEAD_BRANCH}" \
+            "- Branch destino: ${BASE_BRANCH}" \
+            "- Commit validado: ${GITHUB_SHA}" \
+            "Ao aceitar este PR, o push em main decide pelo estado atual da AWS se precisa gerar artefatos nativos e/ou criar/atualizar Lambdas.")"
+
+          existing_pr_number="$(find_existing_pr_number)"
+          if [[ -n "${existing_pr_number}" ]]; then
+            gh pr edit "${existing_pr_number}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" \
+              --body "${body}" >/dev/null
+            gh pr view "${existing_pr_number}" --repo "${GITHUB_REPOSITORY}" --json url --jq '.url'
+            exit 0
+          fi
+
+          set +e
+          create_output="$(
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base "${BASE_BRANCH}" \
+              --head "${head_ref}" \
+              --title "${title}" \
+              --body "${body}" \
+              2>&1
+          )"
+          create_status=$?
+          set -e
+
+          if [[ ${create_status} -eq 0 ]]; then
+            echo "${create_output}"
+            exit 0
+          fi
+
+          existing_pr_number="$(find_existing_pr_number)"
+          if [[ -n "${existing_pr_number}" ]]; then
+            gh pr view "${existing_pr_number}" --repo "${GITHUB_REPOSITORY}" --json url --jq '.url'
+            exit 0
+          fi
+
+          echo "${create_output}" >&2
+          exit "${create_status}"
+
+  resolve_aws_state:
+    name: resolve-aws-state
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: lab
+    outputs:
+      artifact_bucket: ${{ steps.state.outputs.artifact_bucket }}
+      base_version: ${{ steps.state.outputs.base_version }}
+      current_version: ${{ steps.state.outputs.current_version }}
+      modules_to_build_csv: ${{ steps.state.outputs.modules_to_build_csv }}
+      modules_to_build_json: ${{ steps.state.outputs.modules_to_build_json }}
+      modules_to_deploy_csv: ${{ steps.state.outputs.modules_to_deploy_csv }}
+      modules_to_deploy_json: ${{ steps.state.outputs.modules_to_deploy_json }}
+      selected_modules_csv: ${{ steps.state.outputs.selected_modules_csv }}
+      selected_modules_json: ${{ steps.state.outputs.selected_modules_json }}
+      version_bump_required: ${{ steps.state.outputs.version_bump_required }}
+      version_changed: ${{ steps.state.outputs.version_changed }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AUTH_LAMBDA_ARTIFACT_PREFIX: ${{ vars.AUTH_LAMBDA_ARTIFACT_PREFIX || vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
+      AUTH_LAMBDA_FUNCTION_NAME: ${{ vars.AUTH_LAMBDA_FUNCTION_NAME || vars.LAMBDA_FUNCTION_NAME || 'oficina-auth-lambda-lab' }}
+      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET || vars.TERRAFORM_SHARED_DATA_BUCKET_NAME || vars.TF_STATE_BUCKET }}
+      LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX: ${{ vars.NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-notificacao-lambda' }}
+      NOTIFICACAO_LAMBDA_FUNCTION_NAME: ${{ vars.NOTIFICACAO_LAMBDA_FUNCTION_NAME || 'oficina-notificacao-lambda-lab' }}
+      SHARED_INFRA_NAME: ${{ vars.SHARED_INFRA_NAME || vars.EKS_CLUSTER_NAME || 'eks-lab' }}
+      TF_STATE_REGION: ${{ vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Resolve build and deploy state
+        id: state
+        shell: bash
+        env:
+          LAMBDA_TARGET: ${{ inputs.lambda_target || 'all' }}
+        run: |
+          set -euo pipefail
+
+          source ./scripts/lambda-modules.sh
+
+          set_output() {
+            printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT}"
+          }
+
+          extract_version() {
+            sed -n '0,/<version>[[:space:]]*/{
+              s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
+            }' "$1" | head -n 1
+          }
+
+          json_array_from_csv() {
+            local csv="$1"
+            jq -cn --arg csv "${csv}" '($csv | split(",") | map(select(length > 0)))'
+          }
+
+          csv_from_array() {
+            if [[ "$#" -eq 0 ]]; then
+              printf ''
+              return
+            fi
+
+            local joined=""
+            printf -v joined '%s,' "$@"
+            printf '%s' "${joined%,}"
+          }
+
+          resolve_artifact_bucket() {
+            if [[ -n "${LAMBDA_ARTIFACT_BUCKET:-}" ]]; then
+              printf '%s' "${LAMBDA_ARTIFACT_BUCKET}"
+              return
+            fi
+
+            local account_id
+            account_id="$(aws --region "${AWS_REGION}" sts get-caller-identity --query Account --output text)"
+            printf 'tf-shared-%s-%s-%s' "${SHARED_INFRA_NAME}" "${account_id}" "${TF_STATE_REGION}"
+          }
+
+          artifact_key_prefix() {
+            local module="$1"
+            local prefix_var=""
+            local prefix=""
+
+            load_lambda_module "${module}"
+            prefix_var="${LAMBDA_ENV_PREFIX}_LAMBDA_ARTIFACT_PREFIX"
+            prefix="${!prefix_var:-${LAMBDA_ARTIFACT_PREFIX_DEFAULT}}"
+            printf '%s/%s/%s' "${prefix%/}" "${LAMBDA_ARTIFACT_QUALIFIER}" "${current_version}"
+          }
+
+          object_exists() {
+            local key="$1"
+            local error_file
+            error_file="$(mktemp)"
+
+            if aws --region "${AWS_REGION}" s3api head-object \
+              --bucket "${artifact_bucket}" \
+              --key "${key}" >/dev/null 2>"${error_file}"; then
+              rm -f "${error_file}"
+              return 0
+            fi
+
+            if grep -Eq "Not Found|NotFound|404" "${error_file}"; then
+              rm -f "${error_file}"
+              return 1
+            fi
+
+            cat "${error_file}" >&2
+            rm -f "${error_file}"
+            exit 1
+          }
+
+          module_artifact_exists() {
+            local module="$1"
+            local key_prefix=""
+            local named_artifact=""
+
+            load_lambda_module "${module}"
+            key_prefix="$(artifact_key_prefix "${module}")"
+            named_artifact="${LAMBDA_NAMED_ARTIFACT_FILENAME}"
+
+            object_exists "${key_prefix}/function.zip" &&
+              object_exists "${key_prefix}/${named_artifact}"
+          }
+
+          lambda_function_name() {
+            local module="$1"
+            local function_var=""
+
+            load_lambda_module "${module}"
+            function_var="${LAMBDA_ENV_PREFIX}_LAMBDA_FUNCTION_NAME"
+            printf '%s' "${!function_var:-${LAMBDA_FUNCTION_NAME_DEFAULT}}"
+          }
+
+          lambda_deployed_version() {
+            local function_name="$1"
+
+            aws --region "${AWS_REGION}" lambda get-function-configuration \
+              --function-name "${function_name}" \
+              --query 'Environment.Variables.OFICINA_LAMBDA_ARTIFACT_VERSION' \
+              --output text 2>/dev/null || true
+          }
+
+          current_version="$(extract_version pom.xml)"
+          if [[ -z "${current_version}" ]]; then
+            echo "Nao foi possivel identificar project.version em pom.xml" >&2
+            exit 1
+          fi
+
+          if [[ "${current_version}" == *-SNAPSHOT ]]; then
+            echo "A versao fechada da Lambda em main nao pode ser SNAPSHOT: ${current_version}" >&2
+            exit 1
+          fi
+
           base_version=""
           version_changed="false"
           base_ref=""
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
             base_ref="${{ github.event.before }}"
             if git show "${base_ref}:pom.xml" > /tmp/base-pom.xml 2>/dev/null; then
               base_version="$(extract_version /tmp/base-pom.xml)"
@@ -71,295 +354,147 @@ jobs:
             else
               version_changed="true"
             fi
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
+          elif [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             version_changed="true"
           fi
 
-          ./scripts/detect-lambda-impacts.sh "${base_ref}" HEAD
+          selected_modules=()
+          case "${LAMBDA_TARGET}" in
+            all)
+              while IFS= read -r module; do
+                selected_modules+=("${module}")
+              done < <(all_lambda_modules)
+              ;;
+            auth-lambda|notificacao-lambda)
+              selected_modules+=("${LAMBDA_TARGET}")
+              ;;
+            *)
+              echo "Lambda alvo invalido: ${LAMBDA_TARGET}" >&2
+              exit 1
+              ;;
+          esac
 
-          release_tag="v${current_version}"
-          auth_release_asset="$(lambda_release_asset_name auth-lambda "${current_version}" "${LAMBDA_ARCHITECTURE}")"
-          notificacao_release_asset="$(lambda_release_asset_name notificacao-lambda "${current_version}" "${LAMBDA_ARCHITECTURE}")"
-          release_exists="false"
-          if gh release view "${release_tag}" >/dev/null 2>&1; then
-            release_exists="true"
-          fi
-
-          deploy_needed="false"
-          if [[ "${release_exists}" == "false" ]]; then
-            deploy_needed="true"
-          fi
-
-          if [[ "${{ github.ref_name }}" == "main" && "${deploy_needed}" == "true" && "${current_version}" == *-SNAPSHOT ]]; then
-            echo "A versao fechada da release em main nao pode ser SNAPSHOT: ${current_version}" >&2
+          artifact_bucket="$(resolve_artifact_bucket)"
+          if ! aws --region "${AWS_REGION}" s3api head-bucket --bucket "${artifact_bucket}" >/dev/null 2>&1; then
+            echo "Bucket de artefatos ${artifact_bucket} nao existe ou nao esta acessivel. Aplique a infra compartilhada antes do build/deploy das Lambdas." >&2
             exit 1
           fi
 
-          if [[ "${{ github.ref_name }}" == "main" && "${version_changed}" == "true" && "${release_exists}" == "true" ]]; then
-            echo "A release ${release_tag} ja existe. Incremente a versao antes de gerar novos artefatos." >&2
-            exit 1
+          modules_to_build=()
+          modules_to_deploy=()
+
+          for module in "${selected_modules[@]}"; do
+            load_lambda_module "${module}"
+            function_name="$(lambda_function_name "${module}")"
+            key_prefix="$(artifact_key_prefix "${module}")"
+            artifact_exists="false"
+            function_exists="false"
+            deployed_version=""
+            need_build="false"
+            need_deploy="false"
+
+            if module_artifact_exists "${module}"; then
+              artifact_exists="true"
+            else
+              need_build="true"
+            fi
+
+            if aws --region "${AWS_REGION}" lambda get-function \
+              --function-name "${function_name}" >/dev/null 2>&1; then
+              function_exists="true"
+              deployed_version="$(lambda_deployed_version "${function_name}")"
+              if [[ "${deployed_version}" == "None" ]]; then
+                deployed_version=""
+              fi
+            fi
+
+            if [[ "${function_exists}" != "true" || "${deployed_version}" != "${current_version}" || "${need_build}" == "true" ]]; then
+              need_deploy="true"
+            fi
+
+            if [[ "${need_build}" == "true" ]]; then
+              modules_to_build+=("${module}")
+            fi
+
+            if [[ "${need_deploy}" == "true" ]]; then
+              modules_to_deploy+=("${module}")
+            fi
+
+            printf '%s\n' \
+              "Modulo: ${module}" \
+              "  Bucket: ${artifact_bucket}" \
+              "  Prefixo: ${key_prefix}" \
+              "  Artefato existe: ${artifact_exists}" \
+              "  Lambda: ${function_name}" \
+              "  Lambda existe: ${function_exists}" \
+              "  Versao na Lambda: ${deployed_version:-<ausente>}" \
+              "  Build necessario: ${need_build}" \
+              "  Deploy necessario: ${need_deploy}"
+          done
+
+          modules_to_build_csv="$(csv_from_array "${modules_to_build[@]}")"
+          modules_to_deploy_csv="$(csv_from_array "${modules_to_deploy[@]}")"
+          selected_modules_csv="$(csv_from_array "${selected_modules[@]}")"
+          version_bump_required="false"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == "main" && -n "${modules_to_build_csv}" && "${version_changed}" != "true" ]]; then
+            version_bump_required="true"
           fi
 
-          {
-            echo "base_version=${base_version}"
-            echo "current_version=${current_version}"
-            echo "deploy_needed=${deploy_needed}"
-            echo "auth_release_asset=${auth_release_asset}"
-            echo "notificacao_release_asset=${notificacao_release_asset}"
-            echo "release_exists=${release_exists}"
-            echo "release_tag=${release_tag}"
-            echo "version_changed=${version_changed}"
-          } >> "${GITHUB_OUTPUT}"
+          set_output artifact_bucket "${artifact_bucket}"
+          set_output base_version "${base_version}"
+          set_output current_version "${current_version}"
+          set_output modules_to_build_csv "${modules_to_build_csv}"
+          set_output modules_to_build_json "$(json_array_from_csv "${modules_to_build_csv}")"
+          set_output modules_to_deploy_csv "${modules_to_deploy_csv}"
+          set_output modules_to_deploy_json "$(json_array_from_csv "${modules_to_deploy_csv}")"
+          set_output selected_modules_csv "${selected_modules_csv}"
+          set_output selected_modules_json "$(json_array_from_csv "${selected_modules_csv}")"
+          set_output version_bump_required "${version_bump_required}"
+          set_output version_changed "${version_changed}"
 
-          echo "Versao base: ${base_version:-<indisponivel>}"
-          echo "Versao atual: ${current_version}"
-          echo "Mudanca de versao: ${version_changed}"
-          echo "Deploy necessario: ${deploy_needed}"
-          echo "Release alvo: ${release_tag}"
-          echo "Release existente: ${release_exists}"
+          printf 'Versao base: %s\n' "${base_version:-<indisponivel>}"
+          printf 'Versao atual: %s\n' "${current_version}"
+          printf 'Mudanca de versao: %s\n' "${version_changed}"
+          printf 'Modulos selecionados: %s\n' "${selected_modules_csv}"
+          printf 'Modulos para build: %s\n' "${modules_to_build_csv:-<nenhum>}"
+          printf 'Modulos para deploy: %s\n' "${modules_to_deploy_csv:-<nenhum>}"
 
-  build_and_unit_tests:
-    name: build-and-unit-tests
+  require_version_bump:
+    name: require-version-bump
+    if: github.ref_name == 'main' && needs.resolve_aws_state.outputs.version_bump_required == 'true'
     runs-on: ubuntu-latest
-    needs: detect_release_state
-    if: >
-      needs.detect_release_state.outputs.deploy_needed == 'true' &&
-      (github.ref_name == 'develop' || github.event_name == 'workflow_dispatch')
+    needs: resolve_aws_state
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - name: Stop duplicate build
+        shell: bash
+        run: |
+          printf '%s\n%s\n%s\n' \
+            "O estado da AWS exige novo build nativo para a versao ${{ needs.resolve_aws_state.outputs.current_version }}, mas o push em main nao incrementou project.version." \
+            "Versao base: ${{ needs.resolve_aws_state.outputs.base_version || '<indisponivel>' }}" \
+            "Incremente a versao no pom.xml antes de publicar novos artefatos versionados." >&2
+          exit 1
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-
-      - name: Ensure mvnw is executable
-        run: chmod +x ./mvnw
-
-      - name: Run unit tests
-        run: ./mvnw -B test -DfailIfNoTests=false
-
-  integration_tests:
-    name: integration-tests
+  build_native_artifacts:
+    name: build-native-artifacts
+    if: github.ref_name == 'main' && needs.resolve_aws_state.outputs.version_bump_required != 'true' && needs.resolve_aws_state.outputs.modules_to_build_csv != ''
     runs-on: ubuntu-latest
-    needs:
-      - detect_release_state
-      - build_and_unit_tests
-    if: >
-      needs.detect_release_state.outputs.deploy_needed == 'true' &&
-      (github.ref_name == 'develop' || github.event_name == 'workflow_dispatch')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-
-      - name: Ensure mvnw is executable
-        run: chmod +x ./mvnw
-
-      - name: Run integration tests
-        run: ./mvnw -B verify -DskipITs=false -DfailIfNoTests=false
-
-  validate_scripts:
-    name: validate-scripts
-    runs-on: ubuntu-latest
-    needs: detect_release_state
-    if: >
-      needs.detect_release_state.outputs.deploy_needed == 'true' &&
-      (github.ref_name == 'develop' || github.event_name == 'workflow_dispatch')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Validate shell scripts
-        run: bash -n scripts/*.sh
-
-  create_deploy_pull_request:
-    name: create-deploy-pull-request
-    runs-on: ubuntu-latest
-    needs:
-      - detect_release_state
-      - integration_tests
-      - validate_scripts
-    if: >
-      always() &&
-      github.event_name == 'push' &&
-      github.ref_name == 'develop' &&
-      needs.detect_release_state.result == 'success' &&
-      (
-        needs.detect_release_state.outputs.deploy_needed != 'true' ||
-        (
-          needs.integration_tests.result == 'success' &&
-          needs.validate_scripts.result == 'success'
-        )
-      )
+    needs: resolve_aws_state
     permissions:
       contents: read
-      pull-requests: write
-    env:
-      CURRENT_VERSION: ${{ needs.detect_release_state.outputs.current_version }}
-      DEPLOY_NEEDED: ${{ needs.detect_release_state.outputs.deploy_needed }}
-      GH_TOKEN: ${{ github.token }}
-      IMPACTED_MODULES: ${{ needs.detect_release_state.outputs.impacted_modules_csv }}
-      RELEASE_EXISTS: ${{ needs.detect_release_state.outputs.release_exists }}
-      RELEASE_TAG: ${{ needs.detect_release_state.outputs.release_tag }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Create or update deploy pull request
-        shell: bash
-        env:
-          HEAD_BRANCH: ${{ github.ref_name }}
-          BASE_BRANCH: main
-        run: |
-          if [[ "${BASE_BRANCH}" == "${HEAD_BRANCH}" ]]; then
-            echo "Branch base e branch origem do PR de deploy nao podem ser iguais: ${BASE_BRANCH}" >&2
-            exit 1
-          fi
-
-          if [[ "${HEAD_BRANCH}" != "develop" ]]; then
-            echo "Este job so pode criar PR a partir de develop; ref atual: ${HEAD_BRANCH}" >&2
-            exit 1
-          fi
-
-          if [[ "${CURRENT_VERSION}" == *-SNAPSHOT ]]; then
-            echo "Nao vou abrir PR de deploy para versao SNAPSHOT: ${CURRENT_VERSION}" >&2
-            exit 1
-          fi
-
-          git fetch origin "${BASE_BRANCH}" "${HEAD_BRANCH}"
-          head_ref="${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"
-
-          if git diff --quiet "origin/${BASE_BRANCH}...origin/${HEAD_BRANCH}" -- .; then
-            echo "Branch ${HEAD_BRANCH} nao possui diferencas de conteudo em relacao a ${BASE_BRANCH}; PR nao sera criado."
-            exit 0
-          fi
-
-          if [[ "${DEPLOY_NEEDED}" == "true" ]]; then
-            title="Deploy lambdas Oficina ${RELEASE_TAG}"
-            body="$(printf '%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
-              "Deploy automatico preparado pelo CI apos testes e validacao de scripts." \
-              "- Versao: ${CURRENT_VERSION}" \
-              "- Release alvo: ${RELEASE_TAG}" \
-              "- Release existente: ${RELEASE_EXISTS}" \
-              "- Modulos impactados: ${IMPACTED_MODULES:-<nenhum>}" \
-              "- Branch destino: ${BASE_BRANCH}" \
-              "- Branch origem: ${HEAD_BRANCH}" \
-              "- Commit validado: ${GITHUB_SHA}" \
-              "Ao aceitar este PR, o merge em main executa build nativo, GitHub Release e deploy seletivo das Lambdas impactadas.")"
-          else
-            title="Atualiza lambdas Oficina ${RELEASE_TAG}"
-            body="$(printf '%s\n\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n\n%s\n' \
-              "PR automatico preparado pelo CI para sincronizar develop com main." \
-              "- Versao: ${CURRENT_VERSION}" \
-              "- Release alvo: ${RELEASE_TAG}" \
-              "- Release existente: ${RELEASE_EXISTS}" \
-              "- Modulos impactados: ${IMPACTED_MODULES:-<nenhum>}" \
-              "- Branch destino: ${BASE_BRANCH}" \
-              "- Branch origem: ${HEAD_BRANCH}" \
-              "- Commit validado: ${GITHUB_SHA}" \
-              "Como a release da versao atual ja existe, o merge em main nao executa novo build nativo, release nem deploy.")"
-          fi
-
-          existing_pr_url="$(gh pr list \
-            --repo "${GITHUB_REPOSITORY}" \
-            --base "${BASE_BRANCH}" \
-            --head "${head_ref}" \
-            --state open \
-            --json url \
-            --jq '.[0].url // empty')"
-
-          if [[ -n "${existing_pr_url}" ]]; then
-            echo "Pull request ja existente: ${existing_pr_url}"
-            exit 0
-          fi
-
-          set +e
-          create_output="$(gh pr create \
-            --repo "${GITHUB_REPOSITORY}" \
-            --base "${BASE_BRANCH}" \
-            --head "${head_ref}" \
-            --title "${title}" \
-            --body "${body}" \
-            2>&1)"
-          create_status=$?
-          set -e
-
-          if [[ ${create_status} -eq 0 ]]; then
-            echo "${create_output}"
-            exit 0
-          fi
-
-          existing_pr_url="$(gh pr list \
-            --repo "${GITHUB_REPOSITORY}" \
-            --base "${BASE_BRANCH}" \
-            --head "${head_ref}" \
-            --state open \
-            --json url \
-            --jq '.[0].url // empty')"
-
-          if [[ -n "${existing_pr_url}" ]]; then
-            echo "Pull request ja existente: ${existing_pr_url}"
-            exit 0
-          fi
-
-          echo "${create_output}" >&2
-          exit "${create_status}"
-
-  build_native_release_assets:
-    name: build-native-release-assets
-    runs-on: ubuntu-latest
-    needs:
-      - detect_release_state
-      - integration_tests
-      - validate_scripts
-    if: >
-      always() &&
-      github.event_name == 'push' &&
-      github.ref_name == 'main' &&
-      needs.detect_release_state.outputs.deploy_needed == 'true' &&
-      needs.integration_tests.result == 'skipped' &&
-      needs.validate_scripts.result == 'skipped'
-    permissions:
-      contents: write
     environment:
       name: lab
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AUTH_LAMBDA_ARTIFACT_PREFIX: ${{ vars.AUTH_LAMBDA_ARTIFACT_PREFIX || vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
-      LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET || vars.TF_STATE_BUCKET }}
+      LAMBDA_ARTIFACT_BUCKET: ${{ needs.resolve_aws_state.outputs.artifact_bucket }}
       LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
-      LAMBDA_RELEASE_TAG: ${{ needs.detect_release_state.outputs.release_tag }}
-      LAMBDA_RELEASE_VERSION: ${{ needs.detect_release_state.outputs.current_version }}
+      LAMBDA_RELEASE_VERSION: ${{ needs.resolve_aws_state.outputs.current_version }}
       NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX: ${{ vars.NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-notificacao-lambda' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Validate release version
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ "${LAMBDA_RELEASE_VERSION}" == *-SNAPSHOT ]]; then
-            echo "A versao fechada da release nao pode ser SNAPSHOT: ${LAMBDA_RELEASE_VERSION}" >&2
-            exit 1
-          fi
-
-          if gh release view "${LAMBDA_RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "A release ${LAMBDA_RELEASE_TAG} ja existe. Incremente a versao antes de gerar novos artefatos." >&2
-            exit 1
-          fi
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -368,51 +503,7 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Ensure build scripts are executable
-        run: |
-          chmod +x ./mvnw
-          chmod +x ./scripts/*.sh
-
-      - name: Build impacted native Lambdas
-        shell: bash
-        env:
-          IMPACTED_MODULES: ${{ needs.detect_release_state.outputs.impacted_modules_csv }}
-        run: |
-          source ./scripts/lambda-modules.sh
-          release_assets_staging_dir=".tmp/release-assets"
-          rm -rf "${release_assets_staging_dir}"
-          mkdir -p "${release_assets_staging_dir}"
-
-          if [[ -z "${IMPACTED_MODULES}" ]]; then
-            echo "Nenhum modulo impactado detectado para a release ${LAMBDA_RELEASE_TAG}" >&2
-            exit 1
-          fi
-
-          for module in ${IMPACTED_MODULES//,/ }; do
-            ./scripts/build-native-lambda.sh "${module}" -B -DskipTests -DskipITs=true -DfailIfNoTests=false
-            asset_name="$(lambda_release_asset_name "${module}" "${LAMBDA_RELEASE_VERSION}" "${LAMBDA_ARCHITECTURE}")"
-            cp "${module}/target/function.zip" "${release_assets_staging_dir}/${asset_name}"
-          done
-
-          mkdir -p target/release-assets
-          cp "${release_assets_staging_dir}"/*.zip target/release-assets/
-
-          sha256sum target/release-assets/*.zip > target/release-assets/checksums.txt
-
-      - name: Create GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${LAMBDA_RELEASE_TAG}" \
-            target/release-assets/*.zip \
-            target/release-assets/checksums.txt \
-            --target "${GITHUB_SHA}" \
-            --title "${LAMBDA_RELEASE_TAG}" \
-            --notes "Release das Lambdas Oficina ${LAMBDA_RELEASE_VERSION} (${LAMBDA_ARCHITECTURE})."
-
       - name: Configure AWS credentials
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -420,19 +511,20 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - name: Store release assets in S3
-        if: env.LAMBDA_ARTIFACT_BUCKET != ''
+      - name: Ensure scripts are executable
+        run: chmod +x ./mvnw ./scripts/*.sh
+
+      - name: Build and store missing native artifacts
         shell: bash
         env:
-          IMPACTED_MODULES: ${{ needs.detect_release_state.outputs.impacted_modules_csv }}
+          MODULES_TO_BUILD: ${{ needs.resolve_aws_state.outputs.modules_to_build_csv }}
         run: |
-          for module in ${IMPACTED_MODULES//,/ }; do
+          set -euo pipefail
+
+          for module in ${MODULES_TO_BUILD//,/ }; do
+            ./scripts/build-native-lambda.sh "${module}" -B -DskipTests -DskipITs=true -DfailIfNoTests=false
             ./scripts/s3-native-lambda-artifact.sh "${module}" store
           done
-
-      - name: Skip S3 native package store
-        if: env.LAMBDA_ARTIFACT_BUCKET == ''
-        run: echo "LAMBDA_ARTIFACT_BUCKET/TF_STATE_BUCKET ausente; os pacotes ficaram somente no GitHub Release."
 
       - name: Upload native packages
         uses: actions/upload-artifact@v6
@@ -441,22 +533,23 @@ jobs:
           path: |
             auth-lambda/target/*.zip
             notificacao-lambda/target/*.zip
-            target/release-assets/*.zip
-            target/release-assets/checksums.txt
-          if-no-files-found: error
+          if-no-files-found: warn
 
   deploy_lambda:
     name: deploy-lambda
-    runs-on: ubuntu-latest
-    needs:
-      - detect_release_state
-      - build_native_release_assets
     if: >
       always() &&
-      github.event_name == 'push' &&
       github.ref_name == 'main' &&
-      needs.detect_release_state.outputs.deploy_needed == 'true' &&
-      needs.build_native_release_assets.result == 'success'
+      needs.resolve_aws_state.outputs.version_bump_required != 'true' &&
+      needs.resolve_aws_state.outputs.modules_to_deploy_csv != '' &&
+      (
+        needs.build_native_artifacts.result == 'success' ||
+        needs.build_native_artifacts.result == 'skipped'
+      )
+    runs-on: ubuntu-latest
+    needs:
+      - resolve_aws_state
+      - build_native_artifacts
     strategy:
       fail-fast: false
       matrix:
@@ -507,7 +600,10 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
       LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_ARTIFACT_BUCKET: ${{ needs.resolve_aws_state.outputs.artifact_bucket }}
+      LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
       LAMBDA_MEMORY_SIZE: ${{ vars.LAMBDA_MEMORY_SIZE || '256' }}
+      LAMBDA_RELEASE_VERSION: ${{ needs.resolve_aws_state.outputs.current_version }}
       LAMBDA_RUNTIME: ${{ vars.LAMBDA_RUNTIME || 'provided.al2023' }}
       LAMBDA_SECRET_INJECTION_MODE: ${{ vars.LAMBDA_SECRET_INJECTION_MODE || 'env-vars' }}
       MP_JWT_VERIFY_PUBLICKEY: ${{ secrets.MP_JWT_VERIFY_PUBLICKEY }}
@@ -544,33 +640,11 @@ jobs:
       SMALLRYE_JWT_SIGN_KEY_LOCATION: ${{ secrets.SMALLRYE_JWT_SIGN_KEY_LOCATION }}
     steps:
       - name: Checkout
-        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
+        if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
         uses: actions/checkout@v5
 
-      - name: Download native packages
-        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
-        uses: actions/download-artifact@v7
-        with:
-          name: lambda-native-packages
-          path: .
-
-      - name: Validate deploy inputs
-        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
-        shell: bash
-        run: |
-          missing=()
-          [[ -n "${AWS_ACCESS_KEY_ID}" ]] || missing+=("AWS_ACCESS_KEY_ID")
-          [[ -n "${AWS_SECRET_ACCESS_KEY}" ]] || missing+=("AWS_SECRET_ACCESS_KEY")
-          if [[ "${{ matrix.module }}" == "auth-lambda" ]]; then
-            [[ "${ATTACH_API_GATEWAY}" != "true" || -n "${AUTH_API_GATEWAY_ID}" || -n "${AUTH_API_GATEWAY_NAME}" ]] || missing+=("AUTH_API_GATEWAY_ID|AUTH_API_GATEWAY_NAME")
-          fi
-          if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "Missing GitHub Environment values for environment 'lab': ${missing[*]}" >&2
-            exit 1
-          fi
-
       - name: Configure AWS credentials
-        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
+        if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -578,8 +652,28 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
+      - name: Restore native artifact from S3
+        if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
+        run: |
+          chmod +x ./scripts/*.sh
+          ./scripts/s3-native-lambda-artifact.sh "${{ matrix.module }}" restore
+
       - name: Deploy native Lambda
-        if: ${{ (matrix.module == 'auth-lambda' && needs.detect_release_state.outputs.auth_lambda_impacted == 'true') || (matrix.module == 'notificacao-lambda' && needs.detect_release_state.outputs.notificacao_lambda_impacted == 'true') }}
+        if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
         run: |
           chmod +x ./scripts/*.sh
           ./scripts/deploy-native-lambda.sh "${{ matrix.module }}"
+
+  report_noop:
+    name: report-noop
+    if: >
+      github.ref_name == 'main' &&
+      needs.resolve_aws_state.outputs.version_bump_required != 'true' &&
+      needs.resolve_aws_state.outputs.modules_to_build_csv == '' &&
+      needs.resolve_aws_state.outputs.modules_to_deploy_csv == ''
+    runs-on: ubuntu-latest
+    needs: resolve_aws_state
+    steps:
+      - name: Report no-op
+        run: |
+          echo "Artefatos da versao ${{ needs.resolve_aws_state.outputs.current_version }} e Lambdas selecionadas ja estao alinhados na AWS."

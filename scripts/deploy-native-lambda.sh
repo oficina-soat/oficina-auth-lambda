@@ -36,8 +36,21 @@ pick_module_var() {
   printf '%s' "${default_value}"
 }
 
+pom_version() {
+  local pom="${REPO_ROOT}/pom.xml"
+
+  if [[ ! -f "${pom}" ]]; then
+    return
+  fi
+
+  sed -n '0,/<version>[[:space:]]*/{
+    s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
+  }' "${pom}" | head -n 1
+}
+
 ARTIFACT_PATH="${ARTIFACT_PATH:-${REPO_ROOT}/${LAMBDA_BUILD_DIR}/function.zip}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
+LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${LAMBDA_RELEASE_VERSION:-$(pom_version)}}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
 DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
 DB_NAME_OVERRIDE="${DB_NAME:-${QUARKUS_DATASOURCE_DB_NAME:-}}"
@@ -1254,6 +1267,7 @@ extra_env_keys_csv="$(jq -r 'keys | join(",")' <<<"${LAMBDA_EXTRA_ENV_JSON}")"
 if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
   jq -n \
     --arg disable_signal_handlers "true" \
+    --arg lambda_artifact_version "${LAMBDA_ARTIFACT_VERSION}" \
     --arg managed_extra_env_keys "${extra_env_keys_csv}" \
     --arg secrets_manager_config_enabled "${lambda_secrets_manager_config_enabled}" \
     --arg datasource_username "${lambda_datasource_username}" \
@@ -1277,6 +1291,7 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
     --arg oficina_auth_key_id "${OFICINA_AUTH_KEY_ID}" \
     '{
       DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+      OFICINA_LAMBDA_ARTIFACT_VERSION: $lambda_artifact_version,
       OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS: $managed_extra_env_keys,
       SECRETS_MANAGER_CONFIG_ENABLED: $secrets_manager_config_enabled,
       QUARKUS_DATASOURCE_USERNAME: $datasource_username,
@@ -1303,9 +1318,11 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
 else
   jq -n \
     --arg disable_signal_handlers "true" \
+    --arg lambda_artifact_version "${LAMBDA_ARTIFACT_VERSION}" \
     --arg managed_extra_env_keys "${extra_env_keys_csv}" \
     '{
       DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+      OFICINA_LAMBDA_ARTIFACT_VERSION: $lambda_artifact_version,
       OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS: $managed_extra_env_keys
     }' > "${desired_env_file}"
 fi
@@ -1320,6 +1337,7 @@ merged_env_file="$(mktemp)"
 if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
   builtin_managed_keys='[
     "DISABLE_SIGNAL_HANDLERS",
+    "OFICINA_LAMBDA_ARTIFACT_VERSION",
     "OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS",
     "SECRETS_MANAGER_CONFIG_ENABLED",
     "QUARKUS_DATASOURCE_USERNAME",
@@ -1346,6 +1364,7 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
 else
   builtin_managed_keys='[
     "DISABLE_SIGNAL_HANDLERS",
+    "OFICINA_LAMBDA_ARTIFACT_VERSION",
     "OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS"
   ]'
 fi

@@ -1,76 +1,41 @@
 # GitHub Actions
 
-O repositório usa o GitHub Environment `lab` e agora opera duas Lambdas independentes no mesmo ciclo de release do repositório.
+O repositório usa o GitHub Environment `lab` e mantém um único workflow:
 
-Workflows:
+- `.github/workflows/ci.yml` (`Build Deploy Lambda Lab`)
 
-- `.github/workflows/ci.yml`
-- `.github/workflows/redeploy-lambda-lab.yml`
-- `.github/workflows/cleanup-lambda-lab.yml`
-
-## Fluxo do `ci.yml`
+## Fluxo
 
 `push` em `develop`:
 
-- detecta versão e impacto por módulo
-- se a release da versão atual ainda não existir, executa:
-  - `./mvnw test`
-  - `./mvnw verify -DskipITs=false`
-  - `bash -n scripts/*.sh`
+- executa `bash -n scripts/*.sh`
+- executa `./mvnw -B test -DfailIfNoTests=false`
+- executa `./mvnw -B verify -DskipITs=false -DfailIfNoTests=false`
 - cria ou atualiza o PR automático `develop -> main`
+- não faz build nativo
 
 `push` em `main`:
 
 - não aceita versão `-SNAPSHOT`
-- não sobrescreve release já existente
-- builda nativamente apenas os módulos impactados
-- cria a release `v<project.version>`
-- publica os dois assets da versão
-- armazena no S3 apenas os módulos impactados
-- faz deploy apenas das Lambdas impactadas
+- resolve o bucket de artefatos por `LAMBDA_ARTIFACT_BUCKET`, `TERRAFORM_SHARED_DATA_BUCKET_NAME`, `TF_STATE_BUCKET` ou pelo padrão compartilhado `tf-shared-<shared_infra_name>-<account-id>-<region>`
+- falha se o bucket não existir ou não estiver acessível
+- verifica no S3 se `function.zip` e o pacote nomeado da versão atual existem para cada Lambda
+- verifica se a função Lambda existe e se `OFICINA_LAMBDA_ARTIFACT_VERSION` bate com a versão atual do `pom.xml`
+- builda e armazena no S3 apenas artefatos versionados ausentes
+- restaura o pacote do S3 antes do deploy
+- cria a Lambda quando ela não existe
+- atualiza a Lambda quando a versão registrada nela está ausente ou diferente
+- falha antes do build quando a AWS exige novo artefato e o push em `main` não incrementou `project.version`
 
-`workflow_dispatch` em `ci.yml`:
+`workflow_dispatch`:
 
-- executa a mesma detecção de versão/impacto
-- roda os testes apenas quando a release da versão atual ainda não existe
-- não cria release nem faz deploy
+- deve ser executado em `main`
+- aceita `lambda_target=all|auth-lambda|notificacao-lambda`
+- usa a mesma resolução de estado da AWS para decidir build e deploy
 
-## Regras de impacto
+## Estado AWS
 
-Impacta `auth-lambda`:
-
-- `auth-lambda/**`
-
-Impacta `notificacao-lambda`:
-
-- `notificacao-lambda/**`
-
-Impacta ambas:
-
-- `pom.xml`
-- `mvnw`, `mvnw.cmd`, `.mvn/**`
-- `scripts/**`
-- `.github/workflows/**`
-
-Essa regra cobre a Fase 1:
-
-- versão única no repositório
-- build/release únicos por versão
-- deploy seletivo só para Lambdas impactadas
-
-Como a mudança de versão acontece no `pom.xml` pai, toda release válida impacta os dois módulos e publica os dois assets.
-
-## Assets da release
-
-Cada release publica:
-
-- `oficina-auth-lambda-<version>-<LAMBDA_ARCHITECTURE>.zip`
-- `oficina-notificacao-lambda-<version>-<LAMBDA_ARCHITECTURE>.zip`
-- `checksums.txt`
-
-O GitHub Release é a origem oficial do pacote fechado. Depois da criação da release, o workflow baixa de volta os assets e só então replica para S3 e usa no deploy.
-
-## Prefixos S3
+O S3 é a fonte de verdade para o pacote nativo fechado.
 
 Auth:
 
@@ -91,6 +56,8 @@ Defaults:
 - `AUTH_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-auth-lambda`
 - `NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-notificacao-lambda`
 
+O deploy grava `OFICINA_LAMBDA_ARTIFACT_VERSION` nas variáveis da Lambda. Esse valor permite que a action pule deploys repetidos quando a função já aponta para a versão do `pom.xml`.
+
 ## Variáveis e secrets principais
 
 Compartilhados:
@@ -99,6 +66,10 @@ Compartilhados:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 - `AWS_SESSION_TOKEN`
+- `SHARED_INFRA_NAME`
+- `TF_STATE_BUCKET`
+- `TERRAFORM_SHARED_DATA_BUCKET_NAME`
+- `LAMBDA_ARTIFACT_BUCKET`
 - `LAMBDA_ARCHITECTURE`
 - `LAMBDA_RUNTIME`
 - `LAMBDA_MEMORY_SIZE`
@@ -141,62 +112,14 @@ Notificação:
 - `NOTIFICACAO_API_GATEWAY_ROUTE_KEYS`
 - `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON`
 
-`NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` serve para injetar configuração específica da função, como parâmetros do mailer. O deploy grava também `OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS` para conseguir remover chaves extras antigas em atualizações futuras.
+`NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` serve para injetar configuração específica da função, como parâmetros do mailer. O deploy grava também `OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS` para remover chaves extras antigas em atualizações futuras.
 
-Para observabilidade vendor-neutral da autenticação, `AUTH_LAMBDA_EXTRA_ENV_JSON` pode carregar, por exemplo:
-
-```json
-{
-  "OTEL_SERVICE_NAME": "oficina-auth-lambda",
-  "OTEL_RESOURCE_ATTRIBUTES": "service.namespace=oficina,deployment.environment=lab",
-  "OTEL_EXPORTER_OTLP_ENDPOINT": "",
-  "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc",
-  "OTEL_TRACES_EXPORTER": "none",
-  "OTEL_METRICS_EXPORTER": "none",
-  "OTEL_LOGS_EXPORTER": "none",
-  "OFICINA_OBSERVABILITY_ENABLED": "true",
-  "OFICINA_OBSERVABILITY_JSON_LOGS_ENABLED": "true",
-  "OFICINA_OBSERVABILITY_METRICS_ENABLED": "true",
-  "OFICINA_OBSERVABILITY_TRACING_ENABLED": "true",
-  "DEPLOYMENT_ENVIRONMENT": "lab"
-}
-```
-
-Se esse valor não estiver configurado no GitHub Environment `lab`, os workflows usam o fallback:
+Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for sobrescrito, o workflow usa o fallback:
 
 ```json
 {"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}
 ```
 
-Com esse fallback, a `notificacao-lambda` passa a subir com `NOTIFICACAO_LAMBDA_ATTACH_VPC=true`, reutiliza o SG `NOTIFICACAO_LAMBDA_SECURITY_GROUP_NAME` e tenta resolver automaticamente o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp`, criado pelo repositório `oficina-infra-k8s`.
+Com esse fallback, a `notificacao-lambda` sobe com `NOTIFICACAO_LAMBDA_ATTACH_VPC=true`, reutiliza o SG `NOTIFICACAO_LAMBDA_SECURITY_GROUP_NAME` e tenta resolver automaticamente o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp`, criado pelo repositório `oficina-infra-k8s`.
 
 Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` for sobrescrito para SMTP real externo, o JSON deve incluir `QUARKUS_MAILER_FROM`. Quando `QUARKUS_MAILER_MOCK` não estiver em `true`, também deve incluir `QUARKUS_MAILER_HOST`.
-
-## Redeploy manual
-
-`Redeploy Lambda Lab` aceita:
-
-- `lambda_target=all`
-- `lambda_target=auth-lambda`
-- `lambda_target=notificacao-lambda`
-
-O workflow:
-
-- resolve a versão atual do `pom.xml`
-- baixa o asset da release correspondente ao módulo selecionado
-- opcionalmente replica para S3
-- executa o deploy do módulo selecionado
-
-## Cleanup manual
-
-`Cleanup Lambda Lab` exige:
-
-- `confirm_cleanup=CLEANUP`
-- `lambda_target=all|auth-lambda|notificacao-lambda`
-
-O cleanup remove apenas os recursos operacionais da Lambda selecionada:
-
-- função Lambda
-- log group
-- security group dedicado da função, quando aplicável
-- regra de acesso ao RDS criada para a Lambda de auth

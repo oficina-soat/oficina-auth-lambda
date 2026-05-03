@@ -21,8 +21,8 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
 - `pom.xml`: POM pai com versão única do repositório
 - `auth-lambda/`: aplicação Quarkus da Lambda de autenticação
 - `notificacao-lambda/`: aplicação Quarkus da Lambda de notificação
-- `scripts/`: automação de build nativo, release cache, deploy, cleanup e detecção de impacto
-- `.github/workflows/`: CI/CD, redeploy manual e cleanup manual
+- `scripts/`: automação de build nativo, cache S3, deploy, cleanup local e detecção de impacto
+- `.github/workflows/`: build/deploy do laboratório
 - `docs/github-actions.md`: convenções operacionais dos workflows
 
 ## Contratos HTTP preservados
@@ -75,16 +75,15 @@ Env vars padronizadas:
 
 No deploy da Lambda, esse bloco pode ser injetado em `AUTH_LAMBDA_EXTRA_ENV_JSON` quando for necessário sobrescrever os defaults do código.
 
-## Versionamento e release
+## Versionamento e artefatos
 
 - a versão continua única no repositório e fica no `pom.xml` pai
 - `main` não publica `-SNAPSHOT`
-- uma release existente `v<version>` não é sobrescrita
-- toda nova release publica dois assets:
-  - `oficina-auth-lambda-<version>-<arch>.zip`
-  - `oficina-notificacao-lambda-<version>-<arch>.zip`
+- o build nativo fechado fica no S3, em prefixos versionados por módulo
+- se a versão atual já possui artefatos no S3 e a Lambda já está alinhada, a action não rebuilda nem redeploya
+- quando o estado da AWS exigir novo build em `main`, o push precisa trazer incremento de versão no `pom.xml`
 
-Como o `pom.xml` pai é comum, qualquer incremento de versão impacta os dois módulos e obriga a geração dos dois artefatos da release.
+Como o `pom.xml` pai é comum, uma nova versão publicada normalmente gera artefatos versionados para as duas Lambdas.
 
 ## Detecção de impacto por módulo
 
@@ -214,30 +213,26 @@ Exemplo para smoke test sem SMTP real:
 Resumo do fluxo:
 
 - `develop`
-  - quando a release da versão atual ainda não existe, roda `test`, `verify` e `bash -n scripts/*.sh`
+  - roda `test`, `verify -DskipITs=false` e `bash -n scripts/*.sh`
   - cria ou atualiza o PR automático `develop -> main`
+  - não faz build nativo
 - `main`
-  - builda nativamente apenas os módulos impactados
-  - cria a release GitHub com os dois assets da versão
-  - grava no S3 apenas os módulos impactados
-  - faz deploy apenas das Lambdas impactadas
+  - consulta o S3 e a configuração das Lambdas na AWS
+  - builda nativamente apenas os artefatos versionados ausentes
+  - cria a Lambda quando a função ainda não existe
+  - atualiza a Lambda quando a versão registrada em `OFICINA_LAMBDA_ARTIFACT_VERSION` não bate com o `pom.xml`
+  - falha antes do build se a AWS exigir novo artefato e o push em `main` não tiver incrementado a versão
 
-Como a mudança de versão no `pom.xml` pai impacta ambos, toda release válida da Fase 1 acaba publicando os dois assets.
+O workflow também pode ser executado manualmente em `main`, com `lambda_target=all|auth-lambda|notificacao-lambda`.
 
 Detalhes operacionais: [docs/github-actions.md](docs/github-actions.md)
 
 ## Operações manuais
 
-Redeploy da release já fechada:
+Build/deploy idempotente:
 
 ```text
-Actions -> Redeploy Lambda Lab -> Run workflow -> lambda_target=all|auth-lambda|notificacao-lambda
-```
-
-Cleanup operacional:
-
-```text
-Actions -> Cleanup Lambda Lab -> Run workflow -> confirm_cleanup=CLEANUP -> lambda_target=all|auth-lambda|notificacao-lambda
+Actions -> Build Deploy Lambda Lab -> Run workflow -> lambda_target=all|auth-lambda|notificacao-lambda
 ```
 
 ## Validação local
