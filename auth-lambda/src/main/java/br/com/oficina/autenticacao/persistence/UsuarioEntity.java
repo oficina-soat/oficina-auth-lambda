@@ -30,6 +30,7 @@ public class UsuarioEntity extends PanacheEntity {
     @JoinColumn(name = "pessoa_id", nullable = false, unique = true)
     public PessoaEntity pessoa;
 
+    @Column(name = "password", nullable = false)
     public String password;
 
     @ManyToMany
@@ -40,7 +41,7 @@ public class UsuarioEntity extends PanacheEntity {
     public List<PapelEntity> papelEntities = new ArrayList<>();
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status")
+    @Column(name = "status", nullable = false)
     public UsuarioStatus status;
 
     public static UsuarioEntity findByDocumento(String cpf) {

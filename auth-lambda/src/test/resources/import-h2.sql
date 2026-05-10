@@ -1,7 +1,7 @@
-INSERT INTO pessoa (id, documento) VALUES
-    (1, '84191404067'),
-    (2, '36655462007'),
-    (3, '17245011010');
+INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
+    (1, '84191404067', 'FISICA', 'Administrador Laboratorio'),
+    (2, '36655462007', 'FISICA', 'Mecanico Laboratorio'),
+    (3, '17245011010', 'FISICA', 'Recepcionista Laboratorio');
 
 INSERT INTO papel (id, nome) VALUES
     (1, 'administrativo'),

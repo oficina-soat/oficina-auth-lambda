@@ -1,6 +1,7 @@
 package br.com.oficina.autenticacao.resource;
 
 import br.com.oficina.autenticacao.domain.UsuarioStatus;
+import br.com.oficina.autenticacao.domain.TipoPessoa;
 import br.com.oficina.autenticacao.persistence.PapelEntity;
 import br.com.oficina.autenticacao.persistence.PessoaEntity;
 import br.com.oficina.autenticacao.persistence.UsuarioEntity;
@@ -113,6 +114,7 @@ class UsuarioResourceQuarkusTest {
 
             PessoaEntity pessoa = new PessoaEntity();
             pessoa.documento = documento;
+            pessoa.tipoPessoa = TipoPessoa.FISICA;
 
             List<PapelEntity> papelEntities = PapelEntity.list("nome in ?1", List.of(papeis));
             if (papelEntities.size() != papeis.length) {
