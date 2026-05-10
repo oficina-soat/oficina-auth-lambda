@@ -101,6 +101,7 @@ class AutenticarUsuarioUseCaseIT {
     private static void persistUsuario(String documento, String password, UsuarioStatus status, String... papeis) {
         PessoaEntity pessoa = new PessoaEntity();
         pessoa.documento = documento;
+        pessoa.tipoPessoa = TipoPessoa.FISICA;
         List<PapelEntity> papelEntities = PapelEntity.list("nome in ?1", List.of(papeis));
 
         if (papelEntities.size() != papeis.length) {

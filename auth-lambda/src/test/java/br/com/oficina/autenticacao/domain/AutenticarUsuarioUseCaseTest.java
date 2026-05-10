@@ -347,6 +347,7 @@ class AutenticarUsuarioUseCaseTest {
     private static UsuarioEntity usuario(String documento, String password, UsuarioStatus status, String... roles) {
         PessoaEntity pessoa = new PessoaEntity();
         pessoa.documento = documento;
+        pessoa.tipoPessoa = TipoPessoa.FISICA;
 
         UsuarioEntity usuario = new UsuarioEntity();
         usuario.pessoa = pessoa;
