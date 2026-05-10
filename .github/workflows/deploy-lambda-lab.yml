@@ -1,4 +1,4 @@
-name: Build Deploy Lambda Lab
+name: Deploy Lambda Lab
 
 on:
   workflow_dispatch:
@@ -14,7 +14,6 @@ on:
           - notificacao-lambda
   push:
     branches:
-      - develop
       - main
 
 concurrency:
@@ -25,155 +24,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  validate_develop:
-    name: validate-develop
-    if: github.event_name == 'push' && github.ref_name == 'develop'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "25"
-          cache: maven
-
-      - name: Ensure scripts are executable
-        run: chmod +x ./mvnw ./scripts/*.sh
-
-      - name: Validate shell scripts
-        run: bash -n scripts/*.sh
-
-      - name: Run unit tests
-        run: ./mvnw -B test -DfailIfNoTests=false
-
-      - name: Run integration tests
-        run: ./mvnw -B verify -DskipITs=false -DfailIfNoTests=false
-
-  open_pull_request_to_main:
-    name: open-pull-request-to-main
-    if: github.event_name == 'push' && github.ref_name == 'develop'
-    runs-on: ubuntu-latest
-    needs: validate_develop
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Open or update pull request to main
-        shell: bash
-        env:
-          BASE_BRANCH: main
-          GH_TOKEN: ${{ github.token }}
-          HEAD_BRANCH: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-
-          extract_version() {
-            sed -n '0,/<version>[[:space:]]*/{
-              s/.*<version>[[:space:]]*\([^<][^<]*\)[[:space:]]*<\/version>.*/\1/p
-            }' "$1" | head -n 1
-          }
-
-          find_existing_pr_number() {
-            local candidate_head=""
-            local pr_number=""
-
-            for candidate_head in "${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}" "${HEAD_BRANCH}"; do
-              pr_number="$(
-                gh pr list \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --base "${BASE_BRANCH}" \
-                  --head "${candidate_head}" \
-                  --state open \
-                  --json number \
-                  --jq '.[0].number // empty'
-              )"
-
-              if [[ -n "${pr_number}" ]]; then
-                printf '%s\n' "${pr_number}"
-                return
-              fi
-            done
-          }
-
-          current_version="$(extract_version pom.xml)"
-          if [[ -z "${current_version}" ]]; then
-            echo "Nao foi possivel identificar project.version em pom.xml" >&2
-            exit 1
-          fi
-
-          if [[ "${current_version}" == *-SNAPSHOT ]]; then
-            echo "Nao vou abrir PR de deploy para versao SNAPSHOT: ${current_version}" >&2
-            exit 1
-          fi
-
-          git fetch origin "${BASE_BRANCH}" "${HEAD_BRANCH}"
-          head_ref="${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"
-
-          if git merge-base "origin/${BASE_BRANCH}" "origin/${HEAD_BRANCH}" >/dev/null 2>&1; then
-            if git diff --quiet "origin/${BASE_BRANCH}...origin/${HEAD_BRANCH}" -- .; then
-              echo "Branch ${HEAD_BRANCH} nao possui diferencas de conteudo em relacao a ${BASE_BRANCH}; PR nao sera criado."
-              exit 0
-            fi
-          else
-            echo "Branches ${BASE_BRANCH} e ${HEAD_BRANCH} ainda nao possuem merge base; seguindo para a verificacao de PR existente."
-          fi
-
-          title="chore: promover develop para main"
-          body="$(printf '%s\n\n%s\n%s\n%s\n%s\n\n%s\n' \
-            "PR automatico aberto apos testes unitarios, integrados e validacao de scripts." \
-            "- Versao: ${current_version}" \
-            "- Branch origem: ${HEAD_BRANCH}" \
-            "- Branch destino: ${BASE_BRANCH}" \
-            "- Commit validado: ${GITHUB_SHA}" \
-            "Ao aceitar este PR, o push em main decide pelo estado atual da AWS se precisa gerar artefatos nativos e/ou criar/atualizar Lambdas.")"
-
-          existing_pr_number="$(find_existing_pr_number)"
-          if [[ -n "${existing_pr_number}" ]]; then
-            gh pr edit "${existing_pr_number}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --title "${title}" \
-              --body "${body}" >/dev/null
-            gh pr view "${existing_pr_number}" --repo "${GITHUB_REPOSITORY}" --json url --jq '.url'
-            exit 0
-          fi
-
-          set +e
-          create_output="$(
-            gh pr create \
-              --repo "${GITHUB_REPOSITORY}" \
-              --base "${BASE_BRANCH}" \
-              --head "${head_ref}" \
-              --title "${title}" \
-              --body "${body}" \
-              2>&1
-          )"
-          create_status=$?
-          set -e
-
-          if [[ ${create_status} -eq 0 ]]; then
-            echo "${create_output}"
-            exit 0
-          fi
-
-          existing_pr_number="$(find_existing_pr_number)"
-          if [[ -n "${existing_pr_number}" ]]; then
-            gh pr view "${existing_pr_number}" --repo "${GITHUB_REPOSITORY}" --json url --jq '.url'
-            exit 0
-          fi
-
-          echo "${create_output}" >&2
-          exit "${create_status}"
-
   resolve_aws_state:
     name: resolve-aws-state
     if: github.ref_name == 'main'
@@ -207,7 +57,7 @@ jobs:
       TF_STATE_REGION: ${{ vars.TF_STATE_REGION || vars.AWS_REGION || 'us-east-1' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -501,7 +351,7 @@ jobs:
       NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX: ${{ vars.NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-notificacao-lambda' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -648,7 +498,7 @@ jobs:
     steps:
       - name: Checkout
         if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Configure AWS credentials
         if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
