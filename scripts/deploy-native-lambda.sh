@@ -75,6 +75,7 @@ LAMBDA_ARCHITECTURE="$(pick_module_var LAMBDA_ARCHITECTURE LAMBDA_ARCHITECTURE x
 LAMBDA_MEMORY_SIZE="$(pick_module_var LAMBDA_MEMORY_SIZE LAMBDA_MEMORY_SIZE 256)"
 LAMBDA_TIMEOUT="$(pick_module_var LAMBDA_TIMEOUT LAMBDA_TIMEOUT 15)"
 LAMBDA_ROLE_ARN="$(pick_module_var LAMBDA_ROLE_ARN LAMBDA_ROLE_ARN "")"
+LAMBDA_ROLE_NAME="$(pick_module_var LAMBDA_ROLE_NAME LAMBDA_ROLE_NAME "LabRole")"
 LAMBDA_ATTACH_VPC="$(pick_module_var LAMBDA_ATTACH_VPC "" "${LAMBDA_ATTACH_VPC_DEFAULT}")"
 LAMBDA_VPC_ID="$(pick_module_var LAMBDA_VPC_ID LAMBDA_VPC_ID "")"
 LAMBDA_SUBNET_IDS="$(pick_module_var LAMBDA_SUBNET_IDS LAMBDA_SUBNET_IDS "")"
@@ -270,6 +271,90 @@ require_valid_lambda_secret_injection_mode() {
 
 aws_json() {
   aws --region "${AWS_REGION}" "$@" --output json
+}
+
+current_aws_account_id() {
+  aws --region "${AWS_REGION}" sts get-caller-identity \
+    --query Account \
+    --output text
+}
+
+lambda_role_account_from_arn() {
+  local role_arn="$1"
+
+  if [[ "${role_arn}" =~ ^arn:[^:]+:iam::([0-9]{12}):role/(.+)$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return
+  fi
+
+  printf ''
+}
+
+lambda_role_name_from_arn() {
+  local role_arn="$1"
+  local role_path=""
+
+  if [[ "${role_arn}" =~ ^arn:[^:]+:iam::[0-9]{12}:role/(.+)$ ]]; then
+    role_path="${BASH_REMATCH[1]}"
+    printf '%s' "${role_path##*/}"
+    return
+  fi
+
+  printf ''
+}
+
+resolve_lambda_role_arn() {
+  local role_name=""
+  local current_account_id=""
+  local role_account_id=""
+  local resolved_role_arn=""
+  local output=""
+  local status=0
+
+  if [[ -n "${LAMBDA_ROLE_ARN}" ]]; then
+    role_account_id="$(lambda_role_account_from_arn "${LAMBDA_ROLE_ARN}")"
+    if [[ -z "${role_account_id}" ]]; then
+      echo "LAMBDA_ROLE_ARN invalido: informe um ARN de IAM role valido para a Lambda." >&2
+      exit 1
+    fi
+
+    current_account_id="$(current_aws_account_id)"
+    if [[ "${role_account_id}" == "${current_account_id}" ]]; then
+      return
+    fi
+
+    role_name="$(lambda_role_name_from_arn "${LAMBDA_ROLE_ARN}")"
+    require_non_empty "${role_name}" "role_name"
+
+    log "LAMBDA_ROLE_ARN aponta para a conta ${role_account_id}; resolvendo role ${role_name} na conta atual ${current_account_id}"
+  else
+    role_name="${LAMBDA_ROLE_NAME}"
+    require_non_empty "${role_name}" "LAMBDA_ROLE_NAME"
+  fi
+
+  set +e
+  output="$(
+    aws --region "${AWS_REGION}" iam get-role \
+      --role-name "${role_name}" \
+      --query 'Role.Arn' \
+      --output text 2>&1
+  )"
+  status=$?
+  set -e
+
+  if [[ ${status} -ne 0 ]]; then
+    echo "${output}" >&2
+    if [[ -n "${role_account_id}" ]]; then
+      echo "A role configurada para a Lambda pertence a outra conta AWS. Atualize AUTH_LAMBDA_ROLE_ARN/NOTIFICACAO_LAMBDA_ROLE_ARN ou crie a role ${role_name} na conta atual." >&2
+    else
+      echo "Nao foi possivel resolver LAMBDA_ROLE_ARN pela role ${role_name}. Informe LAMBDA_ROLE_ARN ou ajuste LAMBDA_ROLE_NAME." >&2
+    fi
+    exit "${status}"
+  fi
+
+  resolved_role_arn="$(trim "${output}")"
+  require_non_empty "${resolved_role_arn}" "resolved_role_arn"
+  LAMBDA_ROLE_ARN="${resolved_role_arn}"
 }
 
 secret_exists() {
@@ -1435,6 +1520,7 @@ if [[ "${function_exists}" == "true" ]]; then
   aws --region "${AWS_REGION}" lambda wait function-updated \
     --function-name "${LAMBDA_FUNCTION_NAME}"
 else
+  resolve_lambda_role_arn
   require_non_empty "${LAMBDA_ROLE_ARN}" "LAMBDA_ROLE_ARN"
 
   log "Criando a Lambda ${LAMBDA_FUNCTION_NAME}"
@@ -1462,11 +1548,11 @@ else
   set -e
 
   if [[ ${create_status} -ne 0 ]]; then
-    if grep -q "iam:PassRole" <<<"${create_output}"; then
+    if grep -Eq "iam:PassRole|Cross-account pass role" <<<"${create_output}"; then
       fail_with_context \
         "${create_status}" \
         "${create_output}" \
-        "A identidade usada no deploy nao pode executar iam:PassRole na role ${LAMBDA_ROLE_ARN}. Conceda iam:PassRole para essa role ou faca o primeiro provisionamento da Lambda com uma identidade que tenha essa permissao."
+        "A identidade usada no deploy nao pode passar a role ${LAMBDA_ROLE_ARN}. Confirme se a role pertence a mesma conta das credenciais AWS atuais e se a identidade do deploy tem iam:PassRole para ela."
     fi
 
     fail_with_context "${create_status}" "${create_output}"
