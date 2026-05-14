@@ -164,12 +164,16 @@ Defaults operacionais:
 Para configs específicas da função, os workflows e scripts usam nomes separados por Lambda, por exemplo:
 
 - `AUTH_LAMBDA_FUNCTION_NAME`
+- `AUTH_LAMBDA_ROLE_ARN` ou `AUTH_LAMBDA_ROLE_NAME`
 - `AUTH_API_GATEWAY_ROUTE_KEYS`
 - `AUTH_LAMBDA_ARTIFACT_PREFIX`
 - `NOTIFICACAO_LAMBDA_FUNCTION_NAME`
+- `NOTIFICACAO_LAMBDA_ROLE_ARN` ou `NOTIFICACAO_LAMBDA_ROLE_NAME`
 - `NOTIFICACAO_API_GATEWAY_ROUTE_KEYS`
 - `NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX`
 - `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON`
+
+No workflow de `lab`, `*_LAMBDA_ROLE_NAME` usa `LabRole` como default. Se `*_LAMBDA_ROLE_ARN` ainda apontar para uma conta AWS anterior, o script resolve automaticamente uma role com o mesmo nome na conta atual antes de criar a função.
 
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
 
