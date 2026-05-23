@@ -1,5 +1,22 @@
 # oficina-auth-lambda
 
+## Deploy e teste da suíte
+
+O deploy integrado não deve começar por este repositório. Depois de promover as mudanças necessárias para `main`, execute o deploy pelo repositório `../oficina-infra-k8s`:
+
+```text
+oficina-infra-k8s -> Actions -> Deploy Lab -> Run workflow
+```
+
+O `Deploy Lab` do `oficina-infra-k8s` aplica a infraestrutura e dispara o deploy do `oficina-infra-db`; o deploy do banco executa RDS, migrations e seed e, ao final, dispara automaticamente o workflow `deploy-lambda-lab.yml` deste repositório e o `deploy-app-lab.yml` do `oficina-app`. Use o workflow deste repositório diretamente apenas para operação pontual das Lambdas, não como caminho principal da suíte.
+
+Depois que todos os workflows terminarem, o teste principal deve ser executado no repositório `../oficina-app`:
+
+```bash
+cd ../oficina-app
+MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
+```
+
 Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de autenticação e notificação, publicadas em runtime nativo do Quarkus e expostas pelo mesmo HTTP API Gateway do laboratório.
 
 ## Arquitetura
@@ -236,7 +253,7 @@ Detalhes operacionais: [docs/github-actions.md](docs/github-actions.md)
 Build/deploy idempotente:
 
 ```text
-Actions -> Build Deploy Lambda Lab -> Run workflow -> lambda_target=all|auth-lambda|notificacao-lambda
+Actions -> Deploy Lambda Lab -> Run workflow -> lambda_target=all|auth-lambda|notificacao-lambda
 ```
 
 ## Validação local

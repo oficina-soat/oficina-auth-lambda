@@ -1,8 +1,18 @@
 # GitHub Actions
 
-O repositório usa o GitHub Environment `lab` e mantém um único workflow:
+O repositório usa o GitHub Environment `lab` nos jobs de deploy e mantém dois workflows:
 
-- `.github/workflows/ci.yml` (`Build Deploy Lambda Lab`)
+- `.github/workflows/open-pr-to-main.yml` (`Open PR To Main`)
+- `.github/workflows/deploy-lambda-lab.yml` (`Deploy Lambda Lab`)
+
+No fluxo principal da suíte, `Deploy Lambda Lab` é disparado pelo encadeamento `oficina-infra-k8s -> oficina-infra-db -> oficina-auth-lambda`. A execução manual fica reservada para operação pontual das Lambdas em `main`.
+
+Depois que a suíte estiver implantada, a validação fim-a-fim principal deve ser rodada no `oficina-app`:
+
+```bash
+cd ../oficina-app
+MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
+```
 
 ## Fluxo
 
