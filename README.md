@@ -1,5 +1,22 @@
 # oficina-auth-lambda
 
+## Propósito
+
+Lambdas HTTP da suíte Oficina para autenticação, emissão de JWT, publicação de metadados OIDC/JWKS e envio de notificações por e-mail. O repositório é multi-módulo Maven, gera artefatos nativos Quarkus para AWS Lambda e publica as rotas pelo HTTP API Gateway do laboratório.
+
+## Tecnologias utilizadas
+
+- Java 25
+- Quarkus 3.31.x
+- Maven Wrapper multi-módulo
+- Quarkus REST, Amazon Lambda HTTP e SmallRye OpenAPI/Swagger UI
+- SmallRye JWT e BCrypt
+- Panache/Hibernate ORM para autenticação com PostgreSQL
+- Quarkus Mailer para notificação
+- AWS Lambda, API Gateway HTTP API, Secrets Manager, S3 e VPC
+- OpenTelemetry, Micrometer e logs JSON
+- GitHub Actions e scripts Bash em `scripts/`
+
 ## Deploy e teste da suíte
 
 O deploy integrado não deve começar por este repositório. Depois de promover as mudanças necessárias para `main`, execute o deploy pelo repositório `../oficina-infra-k8s`:
@@ -33,6 +50,29 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
 - não há módulo Java compartilhado nesta Fase 1
   - o reuso ficou concentrado no `pom.xml` pai, scripts e workflows
 
+```mermaid
+flowchart LR
+  user[Cliente HTTP] --> apigw[API Gateway HTTP API]
+
+  subgraph repo[oficina-auth-lambda]
+    auth[auth-lambda<br/>POST /auth/token<br/>OIDC/JWKS]
+    notif[notificacao-lambda<br/>POST /notificacoes/email]
+  end
+
+  subgraph aws[AWS lab]
+    apigw --> auth
+    apigw --> notif
+    auth --> secrets[AWS Secrets Manager<br/>oficina/lab/jwt<br/>credencial auth-db]
+    auth --> db[(PostgreSQL RDS<br/>schema auth)]
+    notif --> mailhog[NLB privado MailHog SMTP<br/>repo oficina-infra-k8s]
+    auth --> logs[CloudWatch Logs/Metrics]
+    notif --> logs
+  end
+
+  app[oficina-app] -->|valida JWT por JWKS| apigw
+  app -->|envia e-mail| apigw
+```
+
 ## Estrutura do repositório
 
 - `pom.xml`: POM pai com versão única do repositório
@@ -60,6 +100,21 @@ POST /notificacoes/email
 ```
 
 O endpoint de notificação não é mais publicado pelo mesmo runtime da autenticação. Cada Lambda responde apenas pelas suas próprias rotas.
+
+## Swagger, OpenAPI e Postman
+
+Os módulos expõem Swagger UI/OpenAPI no modo Quarkus dev. Não há coleção Postman versionada neste repositório; importe os documentos OpenAPI abaixo no Postman quando precisar de uma coleção.
+
+- Auth local:
+  - Swagger UI: `http://localhost:9080/q/swagger-ui/`
+  - OpenAPI: `http://localhost:9080/q/openapi`
+- Notificação local:
+  - Swagger UI: `http://localhost:9082/q/swagger-ui/`
+  - OpenAPI: `http://localhost:9082/q/openapi`
+- Lab via API Gateway:
+  - Auth/JWKS: `<OFICINA_AUTH_ISSUER>/.well-known/jwks.json`
+  - OpenID metadata: `<OFICINA_AUTH_ISSUER>/.well-known/openid-configuration`
+  - Swagger/OpenAPI das Lambdas só fica disponível no lab se as rotas `/q/swagger-ui/*` e `/q/openapi` forem explicitamente publicadas no API Gateway.
 
 ## Observabilidade
 
