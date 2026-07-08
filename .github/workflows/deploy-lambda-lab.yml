@@ -30,8 +30,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    environment:
-      name: lab
     outputs:
       artifact_bucket: ${{ steps.state.outputs.artifact_bucket }}
       base_version: ${{ steps.state.outputs.base_version }}
@@ -339,8 +337,6 @@ jobs:
     needs: resolve_aws_state
     permissions:
       contents: read
-    environment:
-      name: lab
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       AUTH_LAMBDA_ARTIFACT_PREFIX: ${{ vars.AUTH_LAMBDA_ARTIFACT_PREFIX || vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
@@ -415,8 +411,6 @@ jobs:
           - notificacao-lambda
     permissions:
       contents: read
-    environment:
-      name: lab
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'eks-lab' }}

@@ -1,6 +1,6 @@
 # GitHub Actions
 
-O repositório usa o GitHub Environment `lab` nos jobs de deploy e mantém dois workflows:
+O repositório mantém dois workflows sem declarar GitHub Environment, para evitar aprovações manuais nos jobs. As variáveis e secrets de deploy devem estar em nível de repositório ou organização:
 
 - `.github/workflows/open-pr-to-main.yml` (`Open PR To Main`)
 - `.github/workflows/deploy-lambda-lab.yml` (`Deploy Lambda Lab`)
