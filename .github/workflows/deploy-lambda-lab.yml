@@ -415,7 +415,7 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'eks-lab' }}
       DB_INSTANCE_IDENTIFIER: ${{ vars.DB_INSTANCE_IDENTIFIER || vars.DB_IDENTIFIER || 'oficina-postgres-lab' }}
-      DB_NAME: ${{ vars.DB_NAME }}
+      DB_NAME: ${{ vars.DB_NAME || 'app' }}
       DB_SSLMODE: ${{ vars.DB_SSLMODE || 'require' }}
       DB_SECURITY_GROUP_IDS: ${{ vars.DB_SECURITY_GROUP_IDS }}
       MASTER_SECRET_ARN: ${{ vars.MASTER_SECRET_ARN }}

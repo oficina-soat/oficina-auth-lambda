@@ -224,6 +224,7 @@ Defaults operacionais:
   - função padrão: `oficina-auth-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-auth-lambda`
   - anexa VPC por padrão
+  - usa `DB_NAME=app` como fallback quando o RDS não informa `DBName`
   - continua bootstrapando usuário do RDS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
@@ -239,6 +240,7 @@ Para configs específicas da função, os workflows e scripts usam nomes separad
 - `AUTH_LAMBDA_ROLE_ARN` ou `AUTH_LAMBDA_ROLE_NAME`
 - `AUTH_API_GATEWAY_ROUTE_KEYS`
 - `AUTH_LAMBDA_ARTIFACT_PREFIX`
+- `DB_NAME`
 - `NOTIFICACAO_LAMBDA_FUNCTION_NAME`
 - `NOTIFICACAO_LAMBDA_ROLE_ARN` ou `NOTIFICACAO_LAMBDA_ROLE_NAME`
 - `NOTIFICACAO_API_GATEWAY_ROUTE_KEYS`
