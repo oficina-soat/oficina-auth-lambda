@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# shellcheck source=scripts/lambda-modules.sh
 source "${SCRIPT_DIR}/lambda-modules.sh"
 
 MODULE="${1:-${LAMBDA_MODULE:-}}"
@@ -61,6 +62,14 @@ MASTER_SECRET_ARN="${MASTER_SECRET_ARN:-}"
 MASTER_DB_USER="${MASTER_DB_USER:-}"
 MASTER_DB_PASSWORD="${MASTER_DB_PASSWORD:-}"
 BOOTSTRAP_AUTH_DB_USER="${BOOTSTRAP_AUTH_DB_USER:-true}"
+AUTH_DB_BOOTSTRAP_MODE="${AUTH_DB_BOOTSTRAP_MODE:-auto}"
+AUTH_DB_BOOTSTRAP_NAMESPACE="${AUTH_DB_BOOTSTRAP_NAMESPACE:-default}"
+AUTH_DB_BOOTSTRAP_JOB_NAME="${AUTH_DB_BOOTSTRAP_JOB_NAME:-oficina-auth-lambda-database-bootstrap}"
+AUTH_DB_BOOTSTRAP_SECRET_NAME="${AUTH_DB_BOOTSTRAP_SECRET_NAME:-oficina-auth-lambda-database-bootstrap}"
+AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME="${AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME:-oficina-auth-lambda-database-bootstrap-scripts}"
+AUTH_DB_BOOTSTRAP_IMAGE="${AUTH_DB_BOOTSTRAP_IMAGE:-postgres:16}"
+AUTH_DB_BOOTSTRAP_TIMEOUT="${AUTH_DB_BOOTSTRAP_TIMEOUT:-300s}"
+SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE="${SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE:-false}"
 AUTH_DB_USER="${AUTH_DB_USER:-oficina_auth_lambda}"
 AUTH_DB_PASSWORD="${AUTH_DB_PASSWORD:-}"
 AUTH_DB_ALLOW_SCHEMA_CHANGES="${AUTH_DB_ALLOW_SCHEMA_CHANGES:-false}"
@@ -105,6 +114,8 @@ OFICINA_AUTH_KEY_ID="${OFICINA_AUTH_KEY_ID:-oficina-lab-rsa}"
 ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY ATTACH_API_GATEWAY true)"
 API_GATEWAY_ID="$(pick_module_var API_GATEWAY_ID API_GATEWAY_ID "")"
 API_GATEWAY_NAME="$(pick_module_var API_GATEWAY_NAME API_GATEWAY_NAME "${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}")"
+# Mantem compatibilidade com variavel legada de rota unica; o deploy usa API_GATEWAY_ROUTE_KEYS.
+# shellcheck disable=SC2034
 API_GATEWAY_ROUTE_KEY="$(pick_module_var API_GATEWAY_ROUTE_KEY API_GATEWAY_ROUTE_KEY "${LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT}")"
 API_GATEWAY_ROUTE_KEYS="$(pick_module_var API_GATEWAY_ROUTE_KEYS API_GATEWAY_ROUTE_KEYS "${LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT}")"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
@@ -116,12 +127,19 @@ current_env_file=""
 desired_env_file=""
 merged_env_file=""
 jwt_tmp_dir=""
+auth_db_bootstrap_script_file=""
 DEPLOY_RUNNER_CIDR=""
+AUTH_DB_BOOTSTRAP_K8S_OBJECTS_CREATED="false"
 declare -a TEMP_DB_CIDR_GROUP_IDS=()
 
 cleanup() {
   rm -f "${current_env_file:-}" "${desired_env_file:-}" "${merged_env_file:-}"
+  rm -f "${auth_db_bootstrap_script_file:-}"
   rm -rf "${jwt_tmp_dir:-}"
+
+  if [[ "${AUTH_DB_BOOTSTRAP_K8S_OBJECTS_CREATED}" == "true" ]] && command -v cleanup_auth_db_bootstrap_k8s_objects >/dev/null 2>&1; then
+    cleanup_auth_db_bootstrap_k8s_objects >/dev/null 2>&1 || true
+  fi
 
   if [[ -n "${DEPLOY_RUNNER_CIDR}" && -n "${db_port:-}" && ${#TEMP_DB_CIDR_GROUP_IDS[@]} -gt 0 ]]; then
     for db_group_id in "${TEMP_DB_CIDR_GROUP_IDS[@]}"; do
@@ -704,7 +722,277 @@ configure_deploy_runner_db_access() {
   done
 }
 
+effective_auth_db_bootstrap_mode() {
+  case "${AUTH_DB_BOOTSTRAP_MODE}" in
+    auto)
+      if [[ "${GITHUB_ACTIONS:-false}" == "true" && -n "${EKS_CLUSTER_NAME}" ]]; then
+        printf 'k8s'
+      else
+        printf 'local'
+      fi
+      ;;
+    local|k8s)
+      printf '%s' "${AUTH_DB_BOOTSTRAP_MODE}"
+      ;;
+    *)
+      echo "AUTH_DB_BOOTSTRAP_MODE invalido: ${AUTH_DB_BOOTSTRAP_MODE}. Use auto, local ou k8s." >&2
+      exit 1
+      ;;
+  esac
+}
+
+ensure_auth_db_bootstrap_kubeconfig() {
+  if [[ "${SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE}" == "true" ]]; then
+    return
+  fi
+
+  require_non_empty "${EKS_CLUSTER_NAME}" "EKS_CLUSTER_NAME"
+  log "Atualizando kubeconfig do cluster ${EKS_CLUSTER_NAME} para bootstrap do usuario do auth-lambda"
+  aws --region "${AWS_REGION}" eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" >/dev/null
+}
+
+cleanup_auth_db_bootstrap_k8s_objects() {
+  kubectl delete job "${AUTH_DB_BOOTSTRAP_JOB_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --ignore-not-found \
+    --wait=true \
+    --timeout=60s >/dev/null 2>&1 || true
+
+  kubectl delete secret "${AUTH_DB_BOOTSTRAP_SECRET_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --ignore-not-found >/dev/null 2>&1 || true
+
+  kubectl delete configmap "${AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --ignore-not-found >/dev/null 2>&1 || true
+}
+
+show_auth_db_bootstrap_k8s_diagnostics() {
+  log "Logs do Job ${AUTH_DB_BOOTSTRAP_JOB_NAME}"
+  kubectl logs "job/${AUTH_DB_BOOTSTRAP_JOB_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --all-containers=true \
+    --tail=-1 || true
+
+  kubectl get pods \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --selector "job-name=${AUTH_DB_BOOTSTRAP_JOB_NAME}" || true
+
+  kubectl describe pods \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --selector "job-name=${AUTH_DB_BOOTSTRAP_JOB_NAME}" || true
+}
+
+wait_for_auth_db_bootstrap_k8s_job() {
+  local complete_pid failed_pid complete_log failed_log
+
+  complete_log="$(mktemp)"
+  failed_log="$(mktemp)"
+
+  kubectl wait \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --for=condition=complete \
+    --timeout="${AUTH_DB_BOOTSTRAP_TIMEOUT}" \
+    "job/${AUTH_DB_BOOTSTRAP_JOB_NAME}" >"${complete_log}" 2>&1 &
+  complete_pid=$!
+
+  kubectl wait \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --for=condition=failed \
+    --timeout="${AUTH_DB_BOOTSTRAP_TIMEOUT}" \
+    "job/${AUTH_DB_BOOTSTRAP_JOB_NAME}" >"${failed_log}" 2>&1 &
+  failed_pid=$!
+
+  while kill -0 "${complete_pid}" 2>/dev/null && kill -0 "${failed_pid}" 2>/dev/null; do
+    sleep 1
+  done
+
+  if ! kill -0 "${complete_pid}" 2>/dev/null && wait "${complete_pid}"; then
+    kill "${failed_pid}" >/dev/null 2>&1 || true
+    wait "${failed_pid}" >/dev/null 2>&1 || true
+    rm -f "${complete_log}" "${failed_log}"
+    return 0
+  fi
+
+  kill "${complete_pid}" "${failed_pid}" >/dev/null 2>&1 || true
+  wait "${complete_pid}" >/dev/null 2>&1 || true
+  wait "${failed_pid}" >/dev/null 2>&1 || true
+  rm -f "${complete_log}" "${failed_log}"
+  return 1
+}
+
+write_auth_db_bootstrap_k8s_script() {
+  auth_db_bootstrap_script_file="$(mktemp)"
+  cat > "${auth_db_bootstrap_script_file}" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+require_non_empty() {
+  local value="$1"
+  local name="$2"
+  if [[ -z "${value}" ]]; then
+    echo "Variavel obrigatoria ausente no Job de bootstrap: ${name}" >&2
+    exit 1
+  fi
+}
+
+require_non_empty "${DB_HOST:-}" "DB_HOST"
+require_non_empty "${DB_PORT:-}" "DB_PORT"
+require_non_empty "${DB_NAME:-}" "DB_NAME"
+require_non_empty "${MASTER_DB_USER:-}" "MASTER_DB_USER"
+require_non_empty "${MASTER_DB_PASSWORD:-}" "MASTER_DB_PASSWORD"
+require_non_empty "${AUTH_DB_USER:-}" "AUTH_DB_USER"
+require_non_empty "${AUTH_DB_PASSWORD:-}" "AUTH_DB_PASSWORD"
+
+echo "Garantindo database ${DB_NAME} em ${DB_HOST}:${DB_PORT}"
+PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
+  "host=${DB_HOST} port=${DB_PORT} dbname=postgres user=${MASTER_DB_USER} sslmode=${DB_SSLMODE:-require}" \
+  -v ON_ERROR_STOP=1 \
+  --set=auth_db_name="${DB_NAME}" \
+  <<'SQL'
+SELECT format('CREATE DATABASE %I', :'auth_db_name')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'auth_db_name') \gexec
+SQL
+
+echo "Criando ou atualizando o usuario ${AUTH_DB_USER} em ${DB_HOST}:${DB_PORT}/${DB_NAME}"
+PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
+  "host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${MASTER_DB_USER} sslmode=${DB_SSLMODE:-require}" \
+  -v ON_ERROR_STOP=1 \
+  --set=auth_db_user="${AUTH_DB_USER}" \
+  --set=auth_db_password="${AUTH_DB_PASSWORD}" \
+  --set=auth_db_allow_schema_changes="${AUTH_DB_ALLOW_SCHEMA_CHANGES:-false}" \
+  <<'SQL'
+SELECT format(
+  'CREATE ROLE %I LOGIN PASSWORD %L',
+  :'auth_db_user',
+  :'auth_db_password'
+)
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'auth_db_user') \gexec
+
+SELECT format(
+  'ALTER ROLE %I WITH LOGIN PASSWORD %L',
+  :'auth_db_user',
+  :'auth_db_password'
+) \gexec
+
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'auth_db_user') \gexec
+SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'auth_db_user') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON ALL TABLES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON TABLES TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I',
+  :'auth_db_user'
+) \gexec
+
+\if :auth_db_allow_schema_changes
+SELECT format('GRANT CREATE ON SCHEMA public TO %I', :'auth_db_user') \gexec
+\endif
+SQL
+SCRIPT
+}
+
+run_auth_db_bootstrap_k8s() {
+  require_cmd kubectl
+
+  log "Executando bootstrap do usuario ${AUTH_DB_USER} por Job Kubernetes em ${AUTH_DB_BOOTSTRAP_NAMESPACE}"
+  ensure_auth_db_bootstrap_kubeconfig
+
+  if ! kubectl get namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" >/dev/null 2>&1; then
+    kubectl create namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" >/dev/null
+  fi
+
+  cleanup_auth_db_bootstrap_k8s_objects
+  AUTH_DB_BOOTSTRAP_K8S_OBJECTS_CREATED="true"
+
+  kubectl create secret generic "${AUTH_DB_BOOTSTRAP_SECRET_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    "--from-literal=DB_SSLMODE=${DB_SSLMODE}" \
+    "--from-literal=DB_HOST=${db_host}" \
+    "--from-literal=DB_PORT=${db_port}" \
+    "--from-literal=DB_NAME=${db_name}" \
+    "--from-literal=MASTER_DB_USER=${MASTER_DB_USER}" \
+    "--from-literal=MASTER_DB_PASSWORD=${MASTER_DB_PASSWORD}" \
+    "--from-literal=AUTH_DB_USER=${AUTH_DB_USER}" \
+    "--from-literal=AUTH_DB_PASSWORD=${AUTH_DB_PASSWORD}" \
+    "--from-literal=AUTH_DB_ALLOW_SCHEMA_CHANGES=${AUTH_DB_ALLOW_SCHEMA_CHANGES}" \
+    --dry-run=client \
+    -o yaml | kubectl apply -f - >/dev/null
+
+  write_auth_db_bootstrap_k8s_script
+  kubectl create configmap "${AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    "--from-file=bootstrap-auth-db.sh=${auth_db_bootstrap_script_file}" \
+    --dry-run=client \
+    -o yaml | kubectl apply -f - >/dev/null
+
+  kubectl apply -f - <<YAML
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${AUTH_DB_BOOTSTRAP_JOB_NAME}
+  namespace: ${AUTH_DB_BOOTSTRAP_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: auth-lambda-database-bootstrap
+    app.kubernetes.io/part-of: oficina
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: auth-lambda-database-bootstrap
+        app.kubernetes.io/part-of: oficina
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: ${AUTH_DB_BOOTSTRAP_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - /bootstrap/bootstrap-auth-db.sh
+          envFrom:
+            - secretRef:
+                name: ${AUTH_DB_BOOTSTRAP_SECRET_NAME}
+          volumeMounts:
+            - name: bootstrap-scripts
+              mountPath: /bootstrap
+              readOnly: true
+      volumes:
+        - name: bootstrap-scripts
+          configMap:
+            name: ${AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME}
+            defaultMode: 0555
+YAML
+
+  if ! wait_for_auth_db_bootstrap_k8s_job; then
+    show_auth_db_bootstrap_k8s_diagnostics
+    echo "Bootstrap do usuario do auth-lambda via Kubernetes Job falhou." >&2
+    exit 1
+  fi
+
+  kubectl logs "job/${AUTH_DB_BOOTSTRAP_JOB_NAME}" \
+    --namespace "${AUTH_DB_BOOTSTRAP_NAMESPACE}" \
+    --all-containers=true \
+    --tail=-1 || true
+
+  cleanup_auth_db_bootstrap_k8s_objects
+  AUTH_DB_BOOTSTRAP_K8S_OBJECTS_CREATED="false"
+  log "Bootstrap do usuario do auth-lambda concluido via Kubernetes Job"
+}
+
 ensure_auth_database_exists() {
+  require_cmd psql
   require_non_empty "${db_host}" "db_host"
   require_non_empty "${db_port}" "db_port"
   require_non_empty "${db_name}" "DB_NAME"
@@ -724,12 +1012,61 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'auth_db_name') \ge
 SQL
 }
 
+bootstrap_auth_db_user_local() {
+  ensure_auth_database_exists
+
+  log "Criando ou atualizando o usuario ${AUTH_DB_USER} em ${db_host}:${db_port}/${db_name}"
+  PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
+    "host=${db_host} port=${db_port} dbname=${db_name} user=${MASTER_DB_USER} sslmode=${DB_SSLMODE}" \
+    -v ON_ERROR_STOP=1 \
+    --set=auth_db_user="${AUTH_DB_USER}" \
+    --set=auth_db_password="${AUTH_DB_PASSWORD}" \
+    --set=auth_db_allow_schema_changes="${AUTH_DB_ALLOW_SCHEMA_CHANGES}" \
+    <<'SQL'
+SELECT format(
+  'CREATE ROLE %I LOGIN PASSWORD %L',
+  :'auth_db_user',
+  :'auth_db_password'
+)
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'auth_db_user') \gexec
+
+SELECT format(
+  'ALTER ROLE %I WITH LOGIN PASSWORD %L',
+  :'auth_db_user',
+  :'auth_db_password'
+) \gexec
+
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'auth_db_user') \gexec
+SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'auth_db_user') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON ALL TABLES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON TABLES TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I',
+  :'auth_db_user'
+) \gexec
+
+\if :auth_db_allow_schema_changes
+SELECT format('GRANT CREATE ON SCHEMA public TO %I', :'auth_db_user') \gexec
+\endif
+SQL
+}
+
 bootstrap_auth_db_user() {
-  require_cmd psql
   require_cmd openssl
 
   local db_master_secret_arn="$1"
   local db_master_username="$2"
+  local bootstrap_mode=""
   local master_secret_json=""
   local existing_auth_secret_user=""
   local existing_auth_secret_password=""
@@ -791,52 +1128,15 @@ bootstrap_auth_db_user() {
   require_non_empty "${AUTH_DB_USER}" "AUTH_DB_USER"
   require_non_empty "${AUTH_DB_PASSWORD}" "AUTH_DB_PASSWORD"
 
-  ensure_auth_database_exists
-
-  log "Criando ou atualizando o usuario ${AUTH_DB_USER} em ${db_host}:${db_port}/${db_name}"
-  PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
-    "host=${db_host} port=${db_port} dbname=${db_name} user=${MASTER_DB_USER} sslmode=${DB_SSLMODE}" \
-    -v ON_ERROR_STOP=1 \
-    --set=auth_db_user="${AUTH_DB_USER}" \
-    --set=auth_db_password="${AUTH_DB_PASSWORD}" \
-    --set=auth_db_allow_schema_changes="${AUTH_DB_ALLOW_SCHEMA_CHANGES}" \
-    <<'SQL'
-SELECT format(
-  'CREATE ROLE %I LOGIN PASSWORD %L',
-  :'auth_db_user',
-  :'auth_db_password'
-)
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'auth_db_user') \gexec
-
-SELECT format(
-  'ALTER ROLE %I WITH LOGIN PASSWORD %L',
-  :'auth_db_user',
-  :'auth_db_password'
-) \gexec
-
-SELECT format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), :'auth_db_user') \gexec
-SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'auth_db_user') \gexec
-SELECT format(
-  'GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON ALL TABLES IN SCHEMA public TO %I',
-  :'auth_db_user'
-) \gexec
-SELECT format(
-  'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I',
-  :'auth_db_user'
-) \gexec
-SELECT format(
-  'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON TABLES TO %I',
-  :'auth_db_user'
-) \gexec
-SELECT format(
-  'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I',
-  :'auth_db_user'
-) \gexec
-
-\if :auth_db_allow_schema_changes
-SELECT format('GRANT CREATE ON SCHEMA public TO %I', :'auth_db_user') \gexec
-\endif
-SQL
+  bootstrap_mode="$(effective_auth_db_bootstrap_mode)"
+  case "${bootstrap_mode}" in
+    local)
+      bootstrap_auth_db_user_local
+      ;;
+    k8s)
+      run_auth_db_bootstrap_k8s
+      ;;
+  esac
 
   QUARKUS_DATASOURCE_USERNAME="${AUTH_DB_USER}"
   QUARKUS_DATASOURCE_PASSWORD="${AUTH_DB_PASSWORD}"

@@ -99,6 +99,10 @@ Auth:
 - `AUTH_API_GATEWAY_ID`
 - `AUTH_API_GATEWAY_NAME`
 - `AUTH_API_GATEWAY_ROUTE_KEYS`
+- `AUTH_DB_BOOTSTRAP_MODE`
+- `AUTH_DB_BOOTSTRAP_NAMESPACE`
+- `AUTH_DB_BOOTSTRAP_IMAGE`
+- `AUTH_DB_BOOTSTRAP_TIMEOUT`
 - `AUTH_DB_USER`
 - `AUTH_DB_SECRET_NAME`
 - `JWT_SECRET_NAME`
@@ -111,6 +115,8 @@ Auth:
 - `AUTH_LAMBDA_EXTRA_ENV_JSON`
 
 Quando `DB_NAME` não é informado, o workflow `Deploy Lambda Lab` usa `app`, que é o database legado esperado pela `auth-lambda`. Se o RDS não retornar `DBName`, o script de deploy também assume `app` e garante a existência do database antes de bootstrapar o usuário `AUTH_DB_USER`. Esse bootstrap não executa migrations nem seed de laboratório.
+
+O workflow usa `AUTH_DB_BOOTSTRAP_MODE=k8s` por padrão porque o RDS do laboratório fica privado na VPC. Nesse modo, o script atualiza o kubeconfig do `EKS_CLUSTER_NAME`, cria um Job Kubernetes efêmero com `AUTH_DB_BOOTSTRAP_IMAGE=postgres:16`, executa o `psql` dentro do cluster e remove os objetos temporários ao final. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas quando o executor tiver rota direta para o endpoint privado do RDS. O modo `auto` seleciona `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos.
 
 Notificação:
 

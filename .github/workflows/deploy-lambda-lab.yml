@@ -422,6 +422,11 @@ jobs:
       MASTER_DB_USER: ${{ vars.MASTER_DB_USER }}
       MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
       BOOTSTRAP_AUTH_DB_USER: ${{ vars.BOOTSTRAP_AUTH_DB_USER || 'true' }}
+      AUTH_DB_BOOTSTRAP_MODE: ${{ vars.AUTH_DB_BOOTSTRAP_MODE || 'k8s' }}
+      AUTH_DB_BOOTSTRAP_NAMESPACE: ${{ vars.AUTH_DB_BOOTSTRAP_NAMESPACE || 'default' }}
+      AUTH_DB_BOOTSTRAP_IMAGE: ${{ vars.AUTH_DB_BOOTSTRAP_IMAGE || 'postgres:16' }}
+      AUTH_DB_BOOTSTRAP_TIMEOUT: ${{ vars.AUTH_DB_BOOTSTRAP_TIMEOUT || '300s' }}
+      SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE: ${{ vars.SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE || 'false' }}
       AUTH_DB_USER: ${{ vars.AUTH_DB_USER || 'oficina_auth_lambda' }}
       AUTH_DB_PASSWORD: ${{ secrets.AUTH_DB_PASSWORD }}
       AUTH_DB_ALLOW_SCHEMA_CHANGES: ${{ vars.AUTH_DB_ALLOW_SCHEMA_CHANGES || 'false' }}
@@ -504,6 +509,10 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Setup kubectl
+        if: matrix.module == 'auth-lambda' && contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
+        uses: azure/setup-kubectl@v5
 
       - name: Restore native artifact from S3
         if: contains(fromJson(needs.resolve_aws_state.outputs.modules_to_deploy_json), matrix.module)
