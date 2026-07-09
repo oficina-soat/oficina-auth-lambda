@@ -225,7 +225,7 @@ Defaults operacionais:
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-auth-lambda`
   - anexa VPC por padrão
   - usa `DB_NAME=app` como fallback quando o RDS não informa `DBName`
-  - continua bootstrapando usuário do RDS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
+  - continua bootstrapando usuário do RDS por Job efêmero no EKS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
@@ -241,6 +241,7 @@ Para configs específicas da função, os workflows e scripts usam nomes separad
 - `AUTH_API_GATEWAY_ROUTE_KEYS`
 - `AUTH_LAMBDA_ARTIFACT_PREFIX`
 - `DB_NAME`
+- `AUTH_DB_BOOTSTRAP_MODE`
 - `NOTIFICACAO_LAMBDA_FUNCTION_NAME`
 - `NOTIFICACAO_LAMBDA_ROLE_ARN` ou `NOTIFICACAO_LAMBDA_ROLE_NAME`
 - `NOTIFICACAO_API_GATEWAY_ROUTE_KEYS`
@@ -250,6 +251,8 @@ Para configs específicas da função, os workflows e scripts usam nomes separad
 No workflow de `lab`, `*_LAMBDA_ROLE_NAME` usa `LabRole` como default. Se `*_LAMBDA_ROLE_ARN` ainda apontar para uma conta AWS anterior, o script resolve automaticamente uma role com o mesmo nome na conta atual antes de criar a função.
 
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
+
+O deploy da `auth-lambda` usa `AUTH_DB_BOOTSTRAP_MODE=k8s` no workflow de `lab`, criando um Job temporário com `postgres:16` dentro do EKS para executar o `psql` contra o RDS privado. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas em execução manual a partir de uma rede com rota direta para o endpoint do RDS. O modo `auto` usa `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos.
 
 Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for informado, o deploy da `notificacao-lambda` em `lab` assume este fallback seguro:
 
