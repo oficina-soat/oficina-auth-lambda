@@ -130,6 +130,6 @@ Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for sobrescrito, o workflow usa 
 {"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}
 ```
 
-Com esse fallback, a `notificacao-lambda` sobe com `NOTIFICACAO_LAMBDA_ATTACH_VPC=true`, reutiliza o SG `NOTIFICACAO_LAMBDA_SECURITY_GROUP_NAME` e tenta resolver automaticamente o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp`, criado pelo repositório `oficina-infra-k8s`.
+Com esse fallback, a `notificacao-lambda` tenta resolver automaticamente o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp`. Quando o NLB existe, o deploy injeta `QUARKUS_MAILER_HOST` e exige VPC para acessar o host privado. Quando o NLB padrão não existe, o deploy injeta `QUARKUS_MAILER_MOCK=true` e segue sem SMTP real.
 
-Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` for sobrescrito para SMTP real externo, o JSON deve incluir `QUARKUS_MAILER_FROM`. Quando `QUARKUS_MAILER_MOCK` não estiver em `true`, também deve incluir `QUARKUS_MAILER_HOST`.
+Quando `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` for sobrescrito para SMTP real externo, o JSON deve incluir `QUARKUS_MAILER_FROM`. Quando `QUARKUS_MAILER_MOCK` não estiver em `true`, também deve incluir `QUARKUS_MAILER_HOST`. Se `NOTIFICACAO_MAILHOG_NLB_NAME` for informado explicitamente, a ausência desse NLB continua falhando cedo.

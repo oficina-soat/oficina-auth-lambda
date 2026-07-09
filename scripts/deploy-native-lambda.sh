@@ -109,6 +109,7 @@ API_GATEWAY_ROUTE_KEYS="$(pick_module_var API_GATEWAY_ROUTE_KEYS API_GATEWAY_ROU
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
 NOTIFICACAO_MAILHOG_NLB_NAME="${NOTIFICACAO_MAILHOG_NLB_NAME:-}"
+NOTIFICACAO_MAILER_USES_PRIVATE_MAILHOG="false"
 
 current_env_file=""
 desired_env_file=""
@@ -1079,10 +1080,12 @@ apply_notificacao_mailer_defaults() {
   local mailer_from
   local mailer_host
   local mailer_mock
+  local mailer_mock_configured
 
   mailer_from="$(trim "$(jq -r '."QUARKUS_MAILER_FROM" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
   mailer_host="$(trim "$(jq -r '."QUARKUS_MAILER_HOST" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
   mailer_mock="$(trim "$(jq -r '."QUARKUS_MAILER_MOCK" // empty' <<<"${LAMBDA_EXTRA_ENV_JSON}")")"
+  mailer_mock_configured="$(jq -r 'has("QUARKUS_MAILER_MOCK")' <<<"${LAMBDA_EXTRA_ENV_JSON}")"
 
   if [[ -z "${mailer_from}" ]]; then
     mailer_from="noreply@oficina.local"
@@ -1090,16 +1093,29 @@ apply_notificacao_mailer_defaults() {
 
   if [[ "${mailer_mock}" != "true" && -z "${mailer_host}" ]]; then
     mailer_host="$(resolve_mailhog_private_host || true)"
+
+    if [[ -n "${mailer_host}" ]]; then
+      NOTIFICACAO_MAILER_USES_PRIVATE_MAILHOG="true"
+    elif [[ -z "${NOTIFICACAO_MAILHOG_NLB_NAME}" && "${mailer_mock_configured}" != "true" ]]; then
+      mailer_mock="true"
+      log "NLB privado do MailHog $(default_mailhog_smtp_nlb_name) nao encontrado; habilitando QUARKUS_MAILER_MOCK=true para a notificacao-lambda"
+    fi
   fi
 
   LAMBDA_EXTRA_ENV_JSON="$(
     jq -cn \
       --argjson current "${LAMBDA_EXTRA_ENV_JSON}" \
       --arg mailer_from "${mailer_from}" \
-      --arg mailer_host "${mailer_host}" '
+      --arg mailer_host "${mailer_host}" \
+      --arg mailer_mock "${mailer_mock}" '
         $current
         + (if (($current."QUARKUS_MAILER_FROM" // "") == "") and $mailer_from != "" then
              {"QUARKUS_MAILER_FROM": $mailer_from}
+           else
+             {}
+           end)
+        + (if (($current."QUARKUS_MAILER_MOCK" // "") == "") and $mailer_mock == "true" then
+             {"QUARKUS_MAILER_MOCK": "true"}
            else
              {}
            end)
@@ -1145,13 +1161,13 @@ validate_notificacao_mailer_env() {
     exit 1
   fi
 
-  if [[ "${mailer_mock}" != "true" && "${LAMBDA_ATTACH_VPC}" != "true" ]]; then
+  if [[ "${NOTIFICACAO_MAILER_USES_PRIVATE_MAILHOG}" == "true" && "${LAMBDA_ATTACH_VPC}" != "true" ]]; then
     echo "A notificacao-lambda precisa de NOTIFICACAO_LAMBDA_ATTACH_VPC=true para acessar o MailHog privado com seguranca." >&2
     exit 1
   fi
 
   if [[ "${mailer_mock}" != "true" && -z "${mailer_host}" ]]; then
-    echo "Nao foi possivel resolver o host privado do MailHog. Verifique o NLB interno ${NOTIFICACAO_MAILHOG_NLB_NAME:-$(default_mailhog_smtp_nlb_name)} ou informe QUARKUS_MAILER_HOST explicitamente em NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON." >&2
+    echo "Nao foi possivel resolver o host privado do MailHog. Verifique o NLB interno ${NOTIFICACAO_MAILHOG_NLB_NAME:-$(default_mailhog_smtp_nlb_name)}, informe QUARKUS_MAILER_HOST explicitamente ou habilite QUARKUS_MAILER_MOCK=true em NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON." >&2
     exit 1
   fi
 }

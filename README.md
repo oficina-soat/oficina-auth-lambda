@@ -64,7 +64,7 @@ flowchart LR
     apigw --> notif
     auth --> secrets[AWS Secrets Manager<br/>oficina/lab/jwt<br/>credencial auth-db]
     auth --> db[(PostgreSQL RDS<br/>schema auth)]
-    notif --> mailhog[NLB privado MailHog SMTP<br/>repo oficina-infra-k8s]
+    notif --> mailer[Mailer mock padrão<br/>SMTP configurável]
     auth --> logs[CloudWatch Logs/Metrics]
     notif --> logs
   end
@@ -229,8 +229,8 @@ Defaults operacionais:
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
   - anexa VPC por padrão no ambiente `lab`
-  - usa por padrão um SG dedicado `${EKS_CLUSTER_NAME}-notificacao-lambda` para alcançar o MailHog privado criado pelo repositório `oficina-infra-k8s`
-  - usa por padrão `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON={"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}` e resolve automaticamente o host privado do MailHog no deploy
+  - usa por padrão `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON={"QUARKUS_MAILER_FROM":"noreply@oficina.local","QUARKUS_MAILER_PORT":"1025","QUARKUS_MAILER_TLS":"false","QUARKUS_MAILER_START_TLS":"DISABLED"}`
+  - tenta resolver automaticamente o host privado do MailHog no deploy; quando o NLB não existe, habilita `QUARKUS_MAILER_MOCK=true` para não bloquear o ciclo de publicação do `lab`
   - quando sobrescrito para SMTP real externo, exige `QUARKUS_MAILER_FROM`; quando `QUARKUS_MAILER_MOCK` não for `true`, também exige `QUARKUS_MAILER_HOST`
 
 Para configs específicas da função, os workflows e scripts usam nomes separados por Lambda, por exemplo:
@@ -249,7 +249,7 @@ No workflow de `lab`, `*_LAMBDA_ROLE_NAME` usa `LabRole` como default. Se `*_LAM
 
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
 
-Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` nao for informado, o deploy da `notificacao-lambda` em `lab` assume este fallback seguro:
+Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for informado, o deploy da `notificacao-lambda` em `lab` assume este fallback seguro:
 
 ```json
 {
@@ -260,7 +260,7 @@ Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` nao for informado, o deploy da `notificac
 }
 ```
 
-Nesse modo, o script de deploy descobre o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp` criado pela infra do laboratório e injeta `QUARKUS_MAILER_HOST` automaticamente. Se o NLB ou o SG dedicado não existirem, o deploy falha cedo em vez de abrir acesso mais amplo.
+Nesse modo, o script de deploy tenta descobrir o DNS privado do NLB interno `${EKS_CLUSTER_NAME}-mailhog-smtp` e injeta `QUARKUS_MAILER_HOST` automaticamente quando o NLB existe. Quando o NLB padrão não existe, o deploy injeta `QUARKUS_MAILER_MOCK=true` e segue sem SMTP real. Se `NOTIFICACAO_MAILHOG_NLB_NAME` for informado explicitamente, ou se `QUARKUS_MAILER_MOCK=false` for informado sem `QUARKUS_MAILER_HOST`, a ausência do host continua falhando cedo.
 
 Exemplo para envio real:
 
