@@ -53,6 +53,7 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${LAMBDA_RELEASE_VERSION:-$(pom_version)}}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
 DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
+DB_NAME_DEFAULT="${DB_NAME_DEFAULT:-app}"
 DB_NAME_OVERRIDE="${DB_NAME:-${QUARKUS_DATASOURCE_DB_NAME:-}}"
 DB_SSLMODE="${DB_SSLMODE:-require}"
 DB_SECURITY_GROUP_IDS="${DB_SECURITY_GROUP_IDS:-}"
@@ -683,6 +684,10 @@ configure_deploy_runner_db_access() {
     return
   fi
 
+  if [[ -n "${DEPLOY_RUNNER_CIDR}" ]]; then
+    return
+  fi
+
   require_cmd curl
   runner_ip="$(curl -fsSL --max-time 10 "${CI_RUNNER_PUBLIC_IP_URL}" | tr -d '[:space:]')"
 
@@ -697,6 +702,26 @@ configure_deploy_runner_db_access() {
     log "Liberando temporariamente acesso ${DEPLOY_RUNNER_CIDR} -> ${db_group_id}:${db_port} para bootstrap do usuario"
     authorize_db_cidr_ingress "${db_group_id}" "${DEPLOY_RUNNER_CIDR}" "${db_port}"
   done
+}
+
+ensure_auth_database_exists() {
+  require_non_empty "${db_host}" "db_host"
+  require_non_empty "${db_port}" "db_port"
+  require_non_empty "${db_name}" "DB_NAME"
+  require_non_empty "${MASTER_DB_USER}" "MASTER_DB_USER"
+  require_non_empty "${MASTER_DB_PASSWORD}" "MASTER_DB_PASSWORD"
+
+  configure_deploy_runner_db_access
+
+  log "Garantindo database ${db_name} em ${db_host}:${db_port}"
+  PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
+    "host=${db_host} port=${db_port} dbname=postgres user=${MASTER_DB_USER} sslmode=${DB_SSLMODE}" \
+    -v ON_ERROR_STOP=1 \
+    --set=auth_db_name="${db_name}" \
+    <<'SQL'
+SELECT format('CREATE DATABASE %I', :'auth_db_name')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'auth_db_name') \gexec
+SQL
 }
 
 bootstrap_auth_db_user() {
@@ -766,7 +791,7 @@ bootstrap_auth_db_user() {
   require_non_empty "${AUTH_DB_USER}" "AUTH_DB_USER"
   require_non_empty "${AUTH_DB_PASSWORD}" "AUTH_DB_PASSWORD"
 
-  configure_deploy_runner_db_access
+  ensure_auth_database_exists
 
   log "Criando ou atualizando o usuario ${AUTH_DB_USER} em ${db_host}:${db_port}/${db_name}"
   PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
@@ -1238,6 +1263,9 @@ if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
 
     if [[ -n "${DB_NAME_OVERRIDE}" ]]; then
       db_name="${DB_NAME_OVERRIDE}"
+    elif [[ -z "${db_name}" ]]; then
+      db_name="${DB_NAME_DEFAULT}"
+      log "DBName ausente no RDS ${DB_INSTANCE_IDENTIFIER}; usando database ${db_name}"
     fi
 
     if [[ -z "${DB_SECURITY_GROUP_IDS}" ]]; then

@@ -89,6 +89,7 @@ Compartilhados:
 
 Auth:
 
+- `DB_NAME`
 - `AUTH_LAMBDA_FUNCTION_NAME`
 - `AUTH_LAMBDA_ROLE_ARN`
 - `AUTH_LAMBDA_ATTACH_VPC`
@@ -108,6 +109,8 @@ Auth:
 - `OFICINA_AUTH_SCOPE`
 - `OFICINA_AUTH_KEY_ID`
 - `AUTH_LAMBDA_EXTRA_ENV_JSON`
+
+Quando `DB_NAME` não é informado, o workflow `Deploy Lambda Lab` usa `app`, que é o database legado esperado pela `auth-lambda`. Se o RDS não retornar `DBName`, o script de deploy também assume `app` e garante a existência do database antes de bootstrapar o usuário `AUTH_DB_USER`. Esse bootstrap não executa migrations nem seed de laboratório.
 
 Notificação:
 
