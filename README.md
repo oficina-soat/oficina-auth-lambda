@@ -153,6 +153,8 @@ No deploy da Lambda, esse bloco pode ser injetado em `AUTH_LAMBDA_EXTRA_ENV_JSON
 - `main` não publica `-SNAPSHOT`
 - o build nativo fechado fica no S3, em prefixos versionados por módulo
 - se a versão atual já possui artefatos no S3 e a Lambda já está alinhada, a action não rebuilda nem redeploya
+- no deploy, pacotes maiores que `DIRECT_ZIP_UPLOAD_MAX_BYTES` usam o bucket de artefatos e `--s3-bucket/--s3-key`, evitando o limite de upload direto da API Lambda
+- para runtimes `provided.*`, o deploy valida se o ZIP contém `bootstrap` na raiz e usa o pacote nativo nomeado quando `function.zip` tiver sido sobrescrito por build JVM local
 - quando o estado da AWS exigir novo build em `main`, o push precisa trazer incremento de versão no `pom.xml`
 
 Como o `pom.xml` pai é comum, uma nova versão publicada normalmente gera artefatos versionados para as duas Lambdas.
@@ -226,7 +228,7 @@ Defaults operacionais:
   - anexa VPC por padrão
   - usa `DB_NAME=app` como fallback quando o RDS não informa `DBName`
   - emite JWT com `aud` para `oficina-os-service`, `oficina-billing-service` e `oficina-execution-service` por padrão; `OFICINA_AUTH_AUDIENCE` aceita lista separada por vírgula, ponto-e-vírgula ou espaço
-  - continua bootstrapando usuário do RDS por Job efêmero no EKS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
+  - continua bootstrapando usuário, schema e seed mínimo do RDS por Job efêmero no EKS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
@@ -243,6 +245,7 @@ Para configs específicas da função, os workflows e scripts usam nomes separad
 - `AUTH_LAMBDA_ARTIFACT_PREFIX`
 - `DB_NAME`
 - `AUTH_DB_BOOTSTRAP_MODE`
+- `BOOTSTRAP_AUTH_DB_SCHEMA`
 - `NOTIFICACAO_LAMBDA_FUNCTION_NAME`
 - `NOTIFICACAO_LAMBDA_ROLE_ARN` ou `NOTIFICACAO_LAMBDA_ROLE_NAME`
 - `NOTIFICACAO_API_GATEWAY_ROUTE_KEYS`
@@ -253,7 +256,7 @@ No workflow de `lab`, `*_LAMBDA_ROLE_NAME` usa `LabRole` como default. Se `*_LAM
 
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
 
-O deploy da `auth-lambda` usa `AUTH_DB_BOOTSTRAP_MODE=k8s` no workflow de `lab`, criando um Job temporário com `postgres:16` dentro do EKS para executar o `psql` contra o RDS privado. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas em execução manual a partir de uma rede com rota direta para o endpoint do RDS. O modo `auto` usa `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos.
+O deploy da `auth-lambda` usa `AUTH_DB_BOOTSTRAP_MODE=k8s` no workflow de `lab`, criando um Job temporário com `postgres:16` dentro do EKS para executar o `psql` contra o RDS privado. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas em execução manual a partir de uma rede com rota direta para o endpoint do RDS. O modo `auto` usa `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos. Por padrão, `BOOTSTRAP_AUTH_DB_SCHEMA=true` cria as tabelas `pessoa`, `papel`, `usuario` e `usuario_papel`, além do seed mínimo de usuários do laboratório.
 
 Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for informado, o deploy da `notificacao-lambda` em `lab` assume este fallback seguro:
 

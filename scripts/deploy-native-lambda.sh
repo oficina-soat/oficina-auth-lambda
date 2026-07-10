@@ -50,9 +50,13 @@ pom_version() {
 }
 
 ARTIFACT_PATH="${ARTIFACT_PATH:-${REPO_ROOT}/${LAMBDA_BUILD_DIR}/function.zip}"
+NATIVE_ARTIFACT_PATH="${NATIVE_ARTIFACT_PATH:-${REPO_ROOT}/${LAMBDA_BUILD_DIR}/${LAMBDA_NAMED_ARTIFACT_FILENAME}}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 LAMBDA_ARTIFACT_VERSION="${LAMBDA_ARTIFACT_VERSION:-${LAMBDA_RELEASE_VERSION:-$(pom_version)}}"
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
+SHARED_INFRA_NAME="${SHARED_INFRA_NAME:-${EKS_CLUSTER_NAME:-eks-lab}}"
+TF_STATE_REGION="${TF_STATE_REGION:-${AWS_REGION}}"
+LAMBDA_ARTIFACT_BUCKET="${LAMBDA_ARTIFACT_BUCKET:-${TF_STATE_BUCKET:-}}"
 DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
 DB_NAME_DEFAULT="${DB_NAME_DEFAULT:-app}"
 DB_NAME_OVERRIDE="${DB_NAME:-${QUARKUS_DATASOURCE_DB_NAME:-}}"
@@ -73,6 +77,7 @@ SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE="${SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UP
 AUTH_DB_USER="${AUTH_DB_USER:-oficina_auth_lambda}"
 AUTH_DB_PASSWORD="${AUTH_DB_PASSWORD:-}"
 AUTH_DB_ALLOW_SCHEMA_CHANGES="${AUTH_DB_ALLOW_SCHEMA_CHANGES:-false}"
+BOOTSTRAP_AUTH_DB_SCHEMA="${BOOTSTRAP_AUTH_DB_SCHEMA:-true}"
 STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER="${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER:-true}"
 AUTH_DB_SECRET_NAME="${AUTH_DB_SECRET_NAME:-oficina/lab/database/auth-lambda}"
 AUTH_DB_SECRET_KMS_KEY_ID="${AUTH_DB_SECRET_KMS_KEY_ID:-}"
@@ -82,6 +87,11 @@ CI_RUNNER_PUBLIC_IP_URL="${CI_RUNNER_PUBLIC_IP_URL:-https://checkip.amazonaws.co
 LAMBDA_FUNCTION_NAME="$(pick_module_var LAMBDA_FUNCTION_NAME LAMBDA_FUNCTION_NAME "${LAMBDA_FUNCTION_NAME_DEFAULT}")"
 LAMBDA_RUNTIME="$(pick_module_var LAMBDA_RUNTIME LAMBDA_RUNTIME provided.al2023)"
 LAMBDA_ARCHITECTURE="$(pick_module_var LAMBDA_ARCHITECTURE LAMBDA_ARCHITECTURE x86_64)"
+module_artifact_prefix_var="${LAMBDA_ENV_PREFIX}_LAMBDA_ARTIFACT_PREFIX"
+LAMBDA_ARTIFACT_PREFIX="${!module_artifact_prefix_var:-${LAMBDA_ARTIFACT_PREFIX:-${LAMBDA_ARTIFACT_PREFIX_DEFAULT}}}"
+LAMBDA_ARTIFACT_QUALIFIER="${LAMBDA_ARTIFACT_QUALIFIER:-${LAMBDA_ARCHITECTURE}}"
+DIRECT_ZIP_UPLOAD_MAX_BYTES="${DIRECT_ZIP_UPLOAD_MAX_BYTES:-50000000}"
+LAMBDA_FORCE_S3_CODE_UPLOAD="${LAMBDA_FORCE_S3_CODE_UPLOAD:-false}"
 LAMBDA_MEMORY_SIZE="$(pick_module_var LAMBDA_MEMORY_SIZE LAMBDA_MEMORY_SIZE 256)"
 LAMBDA_TIMEOUT="$(pick_module_var LAMBDA_TIMEOUT LAMBDA_TIMEOUT 15)"
 LAMBDA_ROLE_ARN="$(pick_module_var LAMBDA_ROLE_ARN LAMBDA_ROLE_ARN "")"
@@ -122,6 +132,8 @@ API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
 NOTIFICACAO_MAILHOG_NLB_NAME="${NOTIFICACAO_MAILHOG_NLB_NAME:-}"
 NOTIFICACAO_MAILER_USES_PRIVATE_MAILHOG="false"
+LAMBDA_CODE_S3_BUCKET=""
+LAMBDA_CODE_S3_KEY=""
 
 current_env_file=""
 desired_env_file=""
@@ -184,6 +196,17 @@ require_non_empty() {
   fi
 }
 
+is_truthy_value() {
+  case "${1:-}" in
+    true | TRUE | True | 1 | yes | YES | Yes)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 normalize_list() {
   local value="$1"
 
@@ -198,6 +221,72 @@ normalize_list() {
   fi
 
   printf '%s' "${value}" | tr -d '[:space:]'
+}
+
+zip_has_root_bootstrap() {
+  local artifact_path="$1"
+  unzip -Z1 "${artifact_path}" | grep -qx 'bootstrap'
+}
+
+select_lambda_artifact_path() {
+  if [[ "${LAMBDA_RUNTIME}" == provided* ]]; then
+    require_cmd unzip
+
+    if [[ -f "${ARTIFACT_PATH}" ]] && zip_has_root_bootstrap "${ARTIFACT_PATH}"; then
+      return
+    fi
+
+    if [[ -f "${NATIVE_ARTIFACT_PATH}" ]] && zip_has_root_bootstrap "${NATIVE_ARTIFACT_PATH}"; then
+      log "Artefato ${ARTIFACT_PATH} nao contem bootstrap; usando pacote nativo ${NATIVE_ARTIFACT_PATH}"
+      ARTIFACT_PATH="${NATIVE_ARTIFACT_PATH}"
+      return
+    fi
+
+    echo "Artefato nativo invalido: informe um ZIP com bootstrap na raiz em ARTIFACT_PATH ou NATIVE_ARTIFACT_PATH." >&2
+    exit 1
+  fi
+
+  if [[ ! -f "${ARTIFACT_PATH}" ]]; then
+    echo "Artefato nao encontrado em ${ARTIFACT_PATH}" >&2
+    exit 1
+  fi
+}
+
+artifact_key_prefix() {
+  printf '%s/%s/%s' "${LAMBDA_ARTIFACT_PREFIX%/}" "${LAMBDA_ARTIFACT_QUALIFIER}" "${LAMBDA_ARTIFACT_VERSION}"
+}
+
+resolve_lambda_artifact_bucket() {
+  if [[ -n "${LAMBDA_ARTIFACT_BUCKET}" ]]; then
+    printf '%s' "${LAMBDA_ARTIFACT_BUCKET}"
+    return
+  fi
+
+  printf 'tf-shared-%s-%s-%s' \
+    "${SHARED_INFRA_NAME}" \
+    "$(aws --region "${AWS_REGION}" sts get-caller-identity --query Account --output text)" \
+    "${TF_STATE_REGION}"
+}
+
+prepare_lambda_code_package() {
+  local artifact_size
+
+  artifact_size="$(wc -c < "${ARTIFACT_PATH}" | tr -d '[:space:]')"
+
+  if ! [[ "${artifact_size}" =~ ^[0-9]+$ ]]; then
+    echo "Nao foi possivel determinar o tamanho do artefato ${ARTIFACT_PATH}" >&2
+    exit 1
+  fi
+
+  if ((artifact_size <= DIRECT_ZIP_UPLOAD_MAX_BYTES)) && ! is_truthy_value "${LAMBDA_FORCE_S3_CODE_UPLOAD}"; then
+    return
+  fi
+
+  LAMBDA_CODE_S3_BUCKET="$(resolve_lambda_artifact_bucket)"
+  LAMBDA_CODE_S3_KEY="$(artifact_key_prefix)/function.zip"
+
+  log "Enviando artefato da Lambda para s3://${LAMBDA_CODE_S3_BUCKET}/${LAMBDA_CODE_S3_KEY}"
+  aws --region "${AWS_REGION}" s3 cp "${ARTIFACT_PATH}" "s3://${LAMBDA_CODE_S3_BUCKET}/${LAMBDA_CODE_S3_KEY}" >/dev/null
 }
 
 trim() {
@@ -861,6 +950,7 @@ PGPASSWORD="${MASTER_DB_PASSWORD}" psql \
   --set=auth_db_user="${AUTH_DB_USER}" \
   --set=auth_db_password="${AUTH_DB_PASSWORD}" \
   --set=auth_db_allow_schema_changes="${AUTH_DB_ALLOW_SCHEMA_CHANGES:-false}" \
+  --set=bootstrap_auth_db_schema="${BOOTSTRAP_AUTH_DB_SCHEMA:-true}" \
   <<'SQL'
 SELECT format(
   'CREATE ROLE %I LOGIN PASSWORD %L',
@@ -897,6 +987,81 @@ SELECT format(
 \if :auth_db_allow_schema_changes
 SELECT format('GRANT CREATE ON SCHEMA public TO %I', :'auth_db_user') \gexec
 \endif
+
+\if :bootstrap_auth_db_schema
+CREATE SEQUENCE IF NOT EXISTS pessoa_seq START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE IF NOT EXISTS papel_seq START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE IF NOT EXISTS usuario_seq START WITH 1 INCREMENT BY 1;
+
+CREATE TABLE IF NOT EXISTS pessoa (
+  id bigint PRIMARY KEY,
+  documento varchar(255) NOT NULL UNIQUE,
+  tipo_pessoa varchar(20) NOT NULL,
+  nome varchar(255)
+);
+
+CREATE TABLE IF NOT EXISTS papel (
+  id bigint PRIMARY KEY,
+  nome varchar(255) NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS usuario (
+  id bigint PRIMARY KEY,
+  pessoa_id bigint NOT NULL UNIQUE REFERENCES pessoa(id),
+  password varchar(255) NOT NULL,
+  status varchar(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usuario_papel (
+  usuario_id bigint NOT NULL REFERENCES usuario(id),
+  papel_id bigint NOT NULL REFERENCES papel(id),
+  PRIMARY KEY (usuario_id, papel_id)
+);
+
+INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
+  (1, '84191404067', 'FISICA', 'Administrador Laboratorio'),
+  (2, '36655462007', 'FISICA', 'Mecanico Laboratorio'),
+  (3, '17245011010', 'FISICA', 'Recepcionista Laboratorio')
+ON CONFLICT (documento) DO UPDATE
+SET tipo_pessoa = EXCLUDED.tipo_pessoa,
+    nome = EXCLUDED.nome;
+
+INSERT INTO papel (id, nome) VALUES
+  (1, 'administrativo'),
+  (2, 'mecanico'),
+  (3, 'recepcionista')
+ON CONFLICT (nome) DO UPDATE
+SET nome = EXCLUDED.nome;
+
+INSERT INTO usuario (id, pessoa_id, password, status) VALUES
+  (1, 1, '$2a$10$hks0l8Lcuh/hWWFwuffKg.GE1ZnPcESJl/sEGnyy9yAXgr1gOTQ3a', 'ATIVO'),
+  (2, 2, '$2a$10$hks0l8Lcuh/hWWFwuffKg.GE1ZnPcESJl/sEGnyy9yAXgr1gOTQ3a', 'ATIVO'),
+  (3, 3, '$2a$10$hks0l8Lcuh/hWWFwuffKg.GE1ZnPcESJl/sEGnyy9yAXgr1gOTQ3a', 'ATIVO')
+ON CONFLICT (pessoa_id) DO UPDATE
+SET password = EXCLUDED.password,
+    status = EXCLUDED.status;
+
+INSERT INTO usuario_papel (usuario_id, papel_id) VALUES
+  (1, 1),
+  (1, 2),
+  (1, 3),
+  (2, 2),
+  (3, 3)
+ON CONFLICT DO NOTHING;
+
+SELECT setval('pessoa_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM pessoa), 1), true);
+SELECT setval('papel_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM papel), 1), true);
+SELECT setval('usuario_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM usuario), 1), true);
+
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON ALL TABLES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+\endif
 SQL
 SCRIPT
 }
@@ -925,6 +1090,7 @@ run_auth_db_bootstrap_k8s() {
     "--from-literal=AUTH_DB_USER=${AUTH_DB_USER}" \
     "--from-literal=AUTH_DB_PASSWORD=${AUTH_DB_PASSWORD}" \
     "--from-literal=AUTH_DB_ALLOW_SCHEMA_CHANGES=${AUTH_DB_ALLOW_SCHEMA_CHANGES}" \
+    "--from-literal=BOOTSTRAP_AUTH_DB_SCHEMA=${BOOTSTRAP_AUTH_DB_SCHEMA}" \
     --dry-run=client \
     -o yaml | kubectl apply -f - >/dev/null
 
@@ -1022,6 +1188,7 @@ bootstrap_auth_db_user_local() {
     --set=auth_db_user="${AUTH_DB_USER}" \
     --set=auth_db_password="${AUTH_DB_PASSWORD}" \
     --set=auth_db_allow_schema_changes="${AUTH_DB_ALLOW_SCHEMA_CHANGES}" \
+    --set=bootstrap_auth_db_schema="${BOOTSTRAP_AUTH_DB_SCHEMA}" \
     <<'SQL'
 SELECT format(
   'CREATE ROLE %I LOGIN PASSWORD %L',
@@ -1057,6 +1224,81 @@ SELECT format(
 
 \if :auth_db_allow_schema_changes
 SELECT format('GRANT CREATE ON SCHEMA public TO %I', :'auth_db_user') \gexec
+\endif
+
+\if :bootstrap_auth_db_schema
+CREATE SEQUENCE IF NOT EXISTS pessoa_seq START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE IF NOT EXISTS papel_seq START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE IF NOT EXISTS usuario_seq START WITH 1 INCREMENT BY 1;
+
+CREATE TABLE IF NOT EXISTS pessoa (
+  id bigint PRIMARY KEY,
+  documento varchar(255) NOT NULL UNIQUE,
+  tipo_pessoa varchar(20) NOT NULL,
+  nome varchar(255)
+);
+
+CREATE TABLE IF NOT EXISTS papel (
+  id bigint PRIMARY KEY,
+  nome varchar(255) NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS usuario (
+  id bigint PRIMARY KEY,
+  pessoa_id bigint NOT NULL UNIQUE REFERENCES pessoa(id),
+  password varchar(255) NOT NULL,
+  status varchar(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usuario_papel (
+  usuario_id bigint NOT NULL REFERENCES usuario(id),
+  papel_id bigint NOT NULL REFERENCES papel(id),
+  PRIMARY KEY (usuario_id, papel_id)
+);
+
+INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
+  (1, '84191404067', 'FISICA', 'Administrador Laboratorio'),
+  (2, '36655462007', 'FISICA', 'Mecanico Laboratorio'),
+  (3, '17245011010', 'FISICA', 'Recepcionista Laboratorio')
+ON CONFLICT (documento) DO UPDATE
+SET tipo_pessoa = EXCLUDED.tipo_pessoa,
+    nome = EXCLUDED.nome;
+
+INSERT INTO papel (id, nome) VALUES
+  (1, 'administrativo'),
+  (2, 'mecanico'),
+  (3, 'recepcionista')
+ON CONFLICT (nome) DO UPDATE
+SET nome = EXCLUDED.nome;
+
+INSERT INTO usuario (id, pessoa_id, password, status) VALUES
+  (1, 1, '$2a$10$hks0l8Lcuh/hWWFwuffKg.GE1ZnPcESJl/sEGnyy9yAXgr1gOTQ3a', 'ATIVO'),
+  (2, 2, '$2a$10$hks0l8Lcuh/hWWFwuffKg.GE1ZnPcESJl/sEGnyy9yAXgr1gOTQ3a', 'ATIVO'),
+  (3, 3, '$2a$10$hks0l8Lcuh/hWWFwuffKg.GE1ZnPcESJl/sEGnyy9yAXgr1gOTQ3a', 'ATIVO')
+ON CONFLICT (pessoa_id) DO UPDATE
+SET password = EXCLUDED.password,
+    status = EXCLUDED.status;
+
+INSERT INTO usuario_papel (usuario_id, papel_id) VALUES
+  (1, 1),
+  (1, 2),
+  (1, 3),
+  (2, 2),
+  (3, 3)
+ON CONFLICT DO NOTHING;
+
+SELECT setval('pessoa_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM pessoa), 1), true);
+SELECT setval('papel_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM papel), 1), true);
+SELECT setval('usuario_seq', GREATEST((SELECT COALESCE(MAX(id), 0) FROM usuario), 1), true);
+
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE, DELETE, TRIGGER, REFERENCES ON ALL TABLES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
+SELECT format(
+  'GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO %I',
+  :'auth_db_user'
+) \gexec
 \endif
 SQL
 }
@@ -1527,14 +1769,13 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
   require_valid_lambda_secret_injection_mode
 fi
 
-if [[ ! -f "${ARTIFACT_PATH}" ]]; then
-  echo "Artefato nao encontrado em ${ARTIFACT_PATH}" >&2
-  exit 1
-fi
+select_lambda_artifact_path
 
 if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
   ensure_jwt_configuration
 fi
+
+prepare_lambda_code_package
 
 if [[ -z "${LAMBDA_SECURITY_GROUP_NAME}" ]]; then
   if [[ "${LAMBDA_MODULE}" == "notificacao-lambda" ]]; then
@@ -1826,6 +2067,11 @@ jq -n \
   }' > "${merged_env_file}"
 
 if [[ "${function_exists}" == "true" ]]; then
+  code_package_args=(--zip-file "fileb://${ARTIFACT_PATH}")
+  if [[ -n "${LAMBDA_CODE_S3_BUCKET}" ]]; then
+    code_package_args=(--s3-bucket "${LAMBDA_CODE_S3_BUCKET}" --s3-key "${LAMBDA_CODE_S3_KEY}")
+  fi
+
   current_architecture="$(
     aws --region "${AWS_REGION}" lambda get-function \
       --function-name "${LAMBDA_FUNCTION_NAME}" \
@@ -1841,7 +2087,7 @@ if [[ "${function_exists}" == "true" ]]; then
   log "Atualizando codigo da Lambda ${LAMBDA_FUNCTION_NAME}"
   aws --region "${AWS_REGION}" lambda update-function-code \
     --function-name "${LAMBDA_FUNCTION_NAME}" \
-    --zip-file "fileb://${ARTIFACT_PATH}"
+    "${code_package_args[@]}"
 
   aws --region "${AWS_REGION}" lambda wait function-updated \
     --function-name "${LAMBDA_FUNCTION_NAME}"
@@ -1864,6 +2110,11 @@ if [[ "${function_exists}" == "true" ]]; then
   aws --region "${AWS_REGION}" lambda wait function-updated \
     --function-name "${LAMBDA_FUNCTION_NAME}"
 else
+  code_package_args=(--zip-file "fileb://${ARTIFACT_PATH}")
+  if [[ -n "${LAMBDA_CODE_S3_BUCKET}" ]]; then
+    code_package_args=(--s3-bucket "${LAMBDA_CODE_S3_BUCKET}" --s3-key "${LAMBDA_CODE_S3_KEY}")
+  fi
+
   resolve_lambda_role_arn
   require_non_empty "${LAMBDA_ROLE_ARN}" "LAMBDA_ROLE_ARN"
 
@@ -1871,7 +2122,7 @@ else
   create_args=(
     --function-name "${LAMBDA_FUNCTION_NAME}"
     --package-type Zip
-    --zip-file "fileb://${ARTIFACT_PATH}"
+    "${code_package_args[@]}"
     --runtime "${LAMBDA_RUNTIME}"
     --handler not.used.in.provided.runtime
     --role "${LAMBDA_ROLE_ARN}"
