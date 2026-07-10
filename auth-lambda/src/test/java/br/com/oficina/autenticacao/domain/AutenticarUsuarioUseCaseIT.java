@@ -23,6 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @QuarkusTest
 class AutenticarUsuarioUseCaseIT {
 
+    private static final Set<String> DEFAULT_AUDIENCES = Set.of(
+            "oficina-os-service",
+            "oficina-billing-service",
+            "oficina-execution-service");
     private static final String DOCUMENTO_MULTIPLOS_PAPEIS = "52998224725";
     private static final String DOCUMENTO_CPF_FORMATADO = "57088799472";
     private static final String DOCUMENTO_SENHA_INVALIDA = "11144477735";
@@ -42,7 +46,7 @@ class AutenticarUsuarioUseCaseIT {
         var token = jwtParser.parse(response.access_token());
 
         assertEquals(DOCUMENTO_MULTIPLOS_PAPEIS, token.getSubject());
-        assertEquals(Set.of("oficina-app"), token.getAudience());
+        assertEquals(DEFAULT_AUDIENCES, token.getAudience());
         assertEquals(Set.of("administrativo", "mecanico"), token.getGroups());
         assertEquals("Bearer", response.token_type());
         assertEquals(3600, response.expires_in());

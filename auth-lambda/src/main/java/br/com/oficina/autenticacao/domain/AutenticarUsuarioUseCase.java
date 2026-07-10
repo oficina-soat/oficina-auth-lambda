@@ -6,15 +6,15 @@ import br.com.oficina.autenticacao.domain.exceptions.SenhaInvalidaException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioInativoException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioNaoEncontradoException;
 import br.com.oficina.autenticacao.observability.AuthObservability;
+import br.com.oficina.autenticacao.persistence.UsuarioEntity;
+import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
+import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
-import br.com.oficina.autenticacao.persistence.UsuarioEntity;
-import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
-import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import io.quarkus.elytron.security.common.BcryptUtil;
 import io.smallrye.jwt.build.Jwt;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -23,6 +23,8 @@ import jakarta.transaction.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -32,7 +34,11 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 public class AutenticarUsuarioUseCase {
     private static final Duration TOKEN_TTL = Duration.ofMinutes(60);
     private static final String DEFAULT_ISSUER = "oficina-api";
-    private static final String DEFAULT_AUDIENCE = "oficina-app";
+    private static final String DEFAULT_AUDIENCE = "oficina-os-service,oficina-billing-service,oficina-execution-service";
+    private static final Set<String> DEFAULT_AUDIENCES = Set.of(
+            "oficina-os-service",
+            "oficina-billing-service",
+            "oficina-execution-service");
     private static final String DEFAULT_SCOPE = "oficina-app";
     private static final String DEFAULT_KEY_ID = "oficina-lab-rsa";
 
@@ -93,7 +99,7 @@ public class AutenticarUsuarioUseCase {
 
             String accessToken = timing.jwt(() -> Jwt.issuer(normalizedIssuer)
                     .subject(usuarioEntity.documento())
-                    .audience(configured(audience, DEFAULT_AUDIENCE))
+                    .audience(configuredAudiences(audience))
                     .scope(configured(scope, DEFAULT_SCOPE))
                     .groups(grupos)
                     .issuedAt(now.getEpochSecond())
@@ -116,6 +122,15 @@ public class AutenticarUsuarioUseCase {
 
     private static String configured(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static Set<String> configuredAudiences(String value) {
+        Set<String> audiences = Arrays.stream(configured(value, DEFAULT_AUDIENCE).split("[,;\\s]+"))
+                .map(String::trim)
+                .filter(audience -> !audience.isBlank())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        return audiences.isEmpty() ? DEFAULT_AUDIENCES : audiences;
     }
 
     private static String normalizeIssuer(String value) {

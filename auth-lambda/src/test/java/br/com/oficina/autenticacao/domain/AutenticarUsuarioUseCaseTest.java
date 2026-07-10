@@ -38,6 +38,11 @@ import static org.mockito.Mockito.when;
 
 class AutenticarUsuarioUseCaseTest {
 
+    private static final Set<String> DEFAULT_AUDIENCES = Set.of(
+            "oficina-os-service",
+            "oficina-billing-service",
+            "oficina-execution-service");
+
     private final AutenticarUsuarioUseCase useCase = new AutenticarUsuarioUseCase();
     private final AuthObservability authObservability = mock(AuthObservability.class);
 
@@ -202,7 +207,7 @@ class AutenticarUsuarioUseCaseTest {
             ArgumentCaptor<Long> issuedAtCaptor = ArgumentCaptor.forClass(Long.class);
             ArgumentCaptor<Long> expiresAtCaptor = ArgumentCaptor.forClass(Long.class);
             verify(jwtClaimsBuilder).subject("84191404067");
-            verify(jwtClaimsBuilder).audience("oficina-app");
+            verify(jwtClaimsBuilder).audience(DEFAULT_AUDIENCES);
             verify(jwtClaimsBuilder).scope("oficina-app");
             verify(jwtClaimsBuilder).groups(Set.of("admin"));
             verify(jwtClaimsBuilder).issuedAt(issuedAtCaptor.capture());
@@ -268,7 +273,7 @@ class AutenticarUsuarioUseCaseTest {
 
         useCase.issuer = "https://auth.oficina.example.com/";
 
-        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder, "oficina-app", "oficina-app",
+        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder, DEFAULT_AUDIENCES, "oficina-app",
                 "oficina-lab-rsa");
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
@@ -292,12 +297,15 @@ class AutenticarUsuarioUseCaseTest {
         JwtClaimsBuilder jwtClaimsBuilder = mock(JwtClaimsBuilder.class, Mockito.CALLS_REAL_METHODS);
 
         useCase.issuer = "https://auth.oficina.example.com";
-        useCase.audience = "oficina-backoffice";
+        useCase.audience = "oficina-backoffice oficina-os-service";
         useCase.scope = "oficina-backoffice.read";
         useCase.keyId = "oficina-prod-rsa";
 
-        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(jwtClaimsBuilder, "oficina-backoffice",
-                "oficina-backoffice.read", "oficina-prod-rsa");
+        JwtSignatureBuilder jwtSignatureBuilder = stubJwtBuilder(
+                jwtClaimsBuilder,
+                Set.of("oficina-backoffice", "oficina-os-service"),
+                "oficina-backoffice.read",
+                "oficina-prod-rsa");
 
         try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class);
              MockedStatic<Jwt> jwtMock = Mockito.mockStatic(Jwt.class)) {
@@ -309,7 +317,7 @@ class AutenticarUsuarioUseCaseTest {
                     useCase.execute(new AutenticarUsuarioRequest("84191404067", "secret"));
 
             assertEquals("signed-token", response.access_token());
-            verify(jwtClaimsBuilder).audience("oficina-backoffice");
+            verify(jwtClaimsBuilder).audience(Set.of("oficina-backoffice", "oficina-os-service"));
             verify(jwtClaimsBuilder).scope("oficina-backoffice.read");
             verify(jwtSignatureBuilder).keyId("oficina-prod-rsa");
         }
@@ -321,10 +329,10 @@ class AutenticarUsuarioUseCaseTest {
     }
 
     private static JwtSignatureBuilder stubJwtBuilder(JwtClaimsBuilder jwtClaimsBuilder) {
-        return stubJwtBuilder(jwtClaimsBuilder, "oficina-app", "oficina-app", "oficina-lab-rsa");
+        return stubJwtBuilder(jwtClaimsBuilder, DEFAULT_AUDIENCES, "oficina-app", "oficina-lab-rsa");
     }
 
-    private static JwtSignatureBuilder stubJwtBuilder(JwtClaimsBuilder jwtClaimsBuilder, String audience, String scope,
+    private static JwtSignatureBuilder stubJwtBuilder(JwtClaimsBuilder jwtClaimsBuilder, Set<String> audience, String scope,
                                                       String keyId) {
         JwtSignatureBuilder jwtSignatureBuilder = mock(JwtSignatureBuilder.class);
         when(jwtClaimsBuilder.subject("84191404067")).thenReturn(jwtClaimsBuilder);
