@@ -225,6 +225,7 @@ Defaults operacionais:
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-auth-lambda`
   - anexa VPC por padrão
   - usa `DB_NAME=app` como fallback quando o RDS não informa `DBName`
+  - emite JWT com `aud` para `oficina-os-service`, `oficina-billing-service` e `oficina-execution-service` por padrão; `OFICINA_AUTH_AUDIENCE` aceita lista separada por vírgula, ponto-e-vírgula ou espaço
   - continua bootstrapando usuário do RDS por Job efêmero no EKS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`

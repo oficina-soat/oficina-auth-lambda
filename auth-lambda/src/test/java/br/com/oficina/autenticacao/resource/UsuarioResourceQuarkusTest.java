@@ -28,6 +28,10 @@ class UsuarioResourceQuarkusTest {
 
     private static final String DOCUMENTO_ATIVO = "52998224725";
     private static final String SENHA_CORRETA = "secret";
+    private static final Set<String> DEFAULT_AUDIENCES = Set.of(
+            "oficina-os-service",
+            "oficina-billing-service",
+            "oficina-execution-service");
 
     @Inject
     JWTParser jwtParser;
@@ -57,7 +61,7 @@ class UsuarioResourceQuarkusTest {
         assertEquals("Bearer", response.token_type());
         assertEquals(3600, response.expires_in());
         assertEquals(DOCUMENTO_ATIVO, token.getSubject());
-        assertEquals(Set.of("oficina-app"), token.getAudience());
+        assertEquals(DEFAULT_AUDIENCES, token.getAudience());
         assertEquals(Set.of("administrativo", "mecanico", "recepcionista"), token.getGroups());
     }
 

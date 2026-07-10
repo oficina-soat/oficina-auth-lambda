@@ -485,7 +485,7 @@ jobs:
       NOTIFICACAO_API_GATEWAY_NAME: ${{ vars.NOTIFICACAO_API_GATEWAY_NAME || vars.API_GATEWAY_NAME || format('{0}-http-api', vars.EKS_CLUSTER_NAME || 'eks-lab') }}
       NOTIFICACAO_API_GATEWAY_ROUTE_KEY: ${{ vars.NOTIFICACAO_API_GATEWAY_ROUTE_KEY || 'POST /notificacoes/email' }}
       NOTIFICACAO_API_GATEWAY_ROUTE_KEYS: ${{ vars.NOTIFICACAO_API_GATEWAY_ROUTE_KEYS || 'POST /notificacoes/email' }}
-      OFICINA_AUTH_AUDIENCE: ${{ vars.OFICINA_AUTH_AUDIENCE || 'oficina-app' }}
+      OFICINA_AUTH_AUDIENCE: ${{ vars.OFICINA_AUTH_AUDIENCE || 'oficina-os-service,oficina-billing-service,oficina-execution-service' }}
       OFICINA_AUTH_ISSUER: ${{ vars.OFICINA_AUTH_ISSUER }}
       OFICINA_AUTH_KEY_ID: ${{ vars.OFICINA_AUTH_KEY_ID || 'oficina-lab-rsa' }}
       OFICINA_AUTH_SCOPE: ${{ vars.OFICINA_AUTH_SCOPE || 'oficina-app' }}
