@@ -2,7 +2,7 @@
 
 ## Propósito
 
-Lambdas HTTP da suíte Oficina para autenticação, emissão de JWT, publicação de metadados OIDC/JWKS e envio de notificações por e-mail. O repositório é multi-módulo Maven, gera artefatos nativos Quarkus para AWS Lambda e publica as rotas pelo HTTP API Gateway do laboratório.
+Lambdas da suíte Oficina para autenticação, ativação de credenciais, sincronização assíncrona de usuários operacionais, emissão de JWT, publicação de metadados OIDC/JWKS e envio de notificações por e-mail. O repositório é multi-módulo Maven, gera artefatos nativos Quarkus para AWS Lambda e integra HTTP API Gateway, SQS, PostgreSQL e Secrets Manager no laboratório.
 
 ## Tecnologias utilizadas
 
@@ -11,72 +11,76 @@ Lambdas HTTP da suíte Oficina para autenticação, emissão de JWT, publicaçã
 - Maven Wrapper multi-módulo
 - Quarkus REST, Amazon Lambda HTTP e SmallRye OpenAPI/Swagger UI
 - SmallRye JWT e BCrypt
-- Panache/Hibernate ORM para autenticação com PostgreSQL
+- Panache/Hibernate ORM e JDBC para autenticação e projeção de usuários no PostgreSQL
 - Quarkus Mailer para notificação
-- AWS Lambda, API Gateway HTTP API, Secrets Manager, S3 e VPC
+- AWS Lambda, API Gateway HTTP API, SNS/SQS, Secrets Manager, S3 e VPC
 - OpenTelemetry, Micrometer e logs JSON
 - GitHub Actions e scripts Bash em `scripts/`
 
 ## Deploy e teste da suíte
 
-O deploy integrado não deve começar por este repositório. Depois de promover as mudanças necessárias para `main`, execute o deploy pelo repositório `../oficina-infra-k8s`:
+O deploy integrado deve começar pelo repositório unificado `../oficina-infra`, que provisiona RDS, SNS/SQS, policies e workloads Kubernetes. Depois de promover as mudanças necessárias para `main`, execute:
 
 ```text
-oficina-infra-k8s -> Actions -> Deploy Lab -> Run workflow
+oficina-infra -> Actions -> Deploy Lab -> Run workflow
 ```
 
-O `Deploy Lab` do `oficina-infra-k8s` aplica a infraestrutura e dispara o deploy do `oficina-infra-db`; o deploy do banco executa RDS, migrations e seed e, ao final, dispara automaticamente o workflow `deploy-lambda-lab.yml` deste repositório e o `deploy-app-lab.yml` do `oficina-app`. Use o workflow deste repositório diretamente apenas para operação pontual das Lambdas, não como caminho principal da suíte.
+Quando a infraestrutura terminar, execute `Deploy Lambda Lab` neste repositório para publicar as funções e criar os event source mappings. Essa ordem garante que as filas e a policy consumidora da `oficina-auth-sync-lambda` existam antes da função. Os repositórios legados `oficina-infra-db` e `oficina-infra-k8s` são somente fontes históricas e não participam do fluxo canônico.
 
-Depois que todos os workflows terminarem, o teste principal deve ser executado no repositório `../oficina-app`:
-
-```bash
-cd ../oficina-app
-MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
-```
-
-Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de autenticação e notificação, publicadas em runtime nativo do Quarkus e expostas pelo mesmo HTTP API Gateway do laboratório.
+Depois que todos os workflows terminarem, valide as rotas e integrações da suíte a partir dos testes de aceitação disponíveis nos repositórios consumidores.
 
 ## Arquitetura
 
 - `auth-lambda`
   - autenticação por CPF e senha
+  - solicitação administrativa e consumo público de token de ativação de credencial
   - emissão de JWT
-  - endpoints `POST /auth`, `POST /auth/token`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
+  - endpoints `POST /auth`, `POST /auth/token`, `POST /auth/usuarios/{usuarioId}/ativacao`, `POST /auth/ativacoes`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
   - integração com PostgreSQL/RDS e AWS Secrets Manager
+- `auth-sync-lambda`
+  - consumo SQS de `usuarioAdicionado`, `usuarioAtualizado` e `usuarioExcluido`
+  - projeção idempotente de CPF, nome, status e papéis, sem alterar credenciais
+  - descarte de snapshots obsoletos pelo `occurredAt`, pois os tipos de evento usam filas distintas
+- `auth-common`
+  - resolução compartilhada de configuração pelo AWS Secrets Manager
 - `notificacao-lambda`
   - envio de e-mail
   - endpoint `POST /notificacoes/email`
   - sem acoplamento direto com banco/JWT
-- não há módulo Java compartilhado nesta Fase 1
-  - o reuso ficou concentrado no `pom.xml` pai, scripts e workflows
 
 ```mermaid
 flowchart LR
   user[Cliente HTTP] --> apigw[API Gateway HTTP API]
 
   subgraph repo[oficina-auth-lambda]
-    auth[auth-lambda<br/>POST /auth/token<br/>OIDC/JWKS]
+    auth[auth-lambda<br/>login e ativação<br/>OIDC/JWKS]
+    sync[auth-sync-lambda<br/>projeção idempotente]
     notif[notificacao-lambda<br/>POST /notificacoes/email]
   end
 
   subgraph aws[AWS lab]
     apigw --> auth
     apigw --> notif
+    queues[SQS<br/>eventos de usuário] --> sync
     auth --> secrets[AWS Secrets Manager<br/>oficina/lab/jwt<br/>credencial auth-db]
     auth --> db[(PostgreSQL RDS<br/>schema auth)]
+    sync --> db
     notif --> mailer[Mailer mock padrão<br/>SMTP configurável]
     auth --> logs[CloudWatch Logs/Metrics]
+    sync --> logs
     notif --> logs
   end
 
-  app[oficina-app] -->|valida JWT por JWKS| apigw
-  app -->|envia e-mail| apigw
+  os[oficina-os-service] -->|Outbox, SNS| queues
+  services[Microsserviços] -->|valida JWT por JWKS| apigw
 ```
 
 ## Estrutura do repositório
 
 - `pom.xml`: POM pai com versão única do repositório
+- `auth-common/`: configuração compartilhada de Secrets Manager
 - `auth-lambda/`: aplicação Quarkus da Lambda de autenticação
+- `auth-sync-lambda/`: consumidor SQS que projeta usuários operacionais no store de autenticação
 - `notificacao-lambda/`: aplicação Quarkus da Lambda de notificação
 - `scripts/`: automação de build nativo, cache S3, deploy, cleanup local e detecção de impacto
 - `.github/workflows/`: build/deploy do laboratório
@@ -89,6 +93,8 @@ Auth:
 ```text
 POST /auth
 POST /auth/token
+POST /auth/usuarios/{usuarioId}/ativacao
+POST /auth/ativacoes
 GET /.well-known/openid-configuration
 GET /.well-known/jwks.json
 ```
@@ -99,7 +105,7 @@ Notificação:
 POST /notificacoes/email
 ```
 
-O endpoint de notificação não é mais publicado pelo mesmo runtime da autenticação. Cada Lambda responde apenas pelas suas próprias rotas.
+O endpoint administrativo de ativação exige o papel `administrativo`; ele emite um token aleatório de uso único, persistido somente como hash SHA-256 e válido por 24 horas por padrão. O endpoint público recebe o token e uma senha entre 12 e 128 caracteres. Usuários `INATIVO`, `BLOQUEADO` ou ainda sem credencial não autenticam. O endpoint de notificação não é publicado pelo mesmo runtime da autenticação, e a `auth-sync-lambda` não possui rota HTTP.
 
 ## Swagger, OpenAPI e Postman
 
@@ -157,7 +163,7 @@ No deploy da Lambda, esse bloco pode ser injetado em `AUTH_LAMBDA_EXTRA_ENV_JSON
 - para runtimes `provided.*`, o deploy valida se o ZIP contém `bootstrap` na raiz e usa o pacote nativo nomeado quando `function.zip` tiver sido sobrescrito por build JVM local
 - quando o estado da AWS exigir novo build em `main`, o push precisa trazer incremento de versão no `pom.xml`
 
-Como o `pom.xml` pai é comum, uma nova versão publicada normalmente gera artefatos versionados para as duas Lambdas.
+Como o `pom.xml` pai é comum, uma nova versão publicada normalmente gera artefatos versionados para as três Lambdas.
 
 ## Detecção de impacto por módulo
 
@@ -166,12 +172,18 @@ A detecção fica em `scripts/detect-lambda-impacts.sh`.
 Impacta `auth-lambda`:
 
 - alterações em `auth-lambda/**`
+- alterações em `auth-common/**`
+
+Impacta `auth-sync-lambda`:
+
+- alterações em `auth-sync-lambda/**`
+- alterações em `auth-common/**`
 
 Impacta `notificacao-lambda`:
 
 - alterações em `notificacao-lambda/**`
 
-Impacta ambas:
+Impacta as três Lambdas:
 
 - `pom.xml`
 - `mvnw`, `mvnw.cmd`, `.mvn/**`
@@ -199,10 +211,19 @@ Notificação:
 
 - mock event server: `http://localhost:9082`
 
+Sincronização de usuários:
+
+```bash
+./mvnw -pl auth-sync-lambda test
+```
+
+O teste de integração sobe PostgreSQL real por Testcontainers e cobre criação, atualização, inativação, adoção de seed, idempotência, reordenação e resposta parcial de lote SQS.
+
 ## Build nativo por módulo
 
 ```bash
 ./scripts/build-native-lambda.sh auth-lambda
+./scripts/build-native-lambda.sh auth-sync-lambda
 ./scripts/build-native-lambda.sh notificacao-lambda
 ```
 
@@ -210,6 +231,8 @@ Artefatos gerados:
 
 - `auth-lambda/target/function.zip`
 - `auth-lambda/target/oficina-auth-lambda-native.zip`
+- `auth-sync-lambda/target/function.zip`
+- `auth-sync-lambda/target/oficina-auth-sync-lambda-native.zip`
 - `notificacao-lambda/target/function.zip`
 - `notificacao-lambda/target/oficina-notificacao-lambda-native.zip`
 
@@ -217,6 +240,7 @@ Artefatos gerados:
 
 ```bash
 ./scripts/deploy-native-lambda.sh auth-lambda
+./scripts/deploy-native-lambda.sh auth-sync-lambda
 ./scripts/deploy-native-lambda.sh notificacao-lambda
 ```
 
@@ -229,6 +253,12 @@ Defaults operacionais:
   - usa `DB_NAME=app` como fallback quando o RDS não informa `DBName`
   - emite JWT com `aud` para `oficina-os-service`, `oficina-billing-service` e `oficina-execution-service` por padrão; `OFICINA_AUTH_AUDIENCE` aceita lista separada por vírgula, ponto-e-vírgula ou espaço
   - continua bootstrapando usuário, schema e seed mínimo do RDS por Job efêmero no EKS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
+- `auth-sync-lambda`
+  - função padrão: `oficina-auth-sync-lambda-lab`
+  - prefixo S3 padrão: `oficina/lab/lambda/oficina-auth-sync-lambda`
+  - anexa VPC por padrão e reutiliza a credencial do database de autenticação
+  - cria event source mappings para as três filas de eventos de usuário com `ReportBatchItemFailures`
+  - não executa bootstrap do schema nem se conecta ao API Gateway
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
@@ -246,6 +276,12 @@ Para configs específicas da função, os workflows e scripts usam nomes separad
 - `DB_NAME`
 - `AUTH_DB_BOOTSTRAP_MODE`
 - `BOOTSTRAP_AUTH_DB_SCHEMA`
+- `OFICINA_AUTH_ACTIVATION_TTL_HOURS` (padrão `24`, intervalo aceito de 1 a 168 horas)
+- `AUTH_SYNC_LAMBDA_FUNCTION_NAME`
+- `AUTH_SYNC_LAMBDA_ROLE_ARN` ou `AUTH_SYNC_LAMBDA_ROLE_NAME`
+- `AUTH_SYNC_LAMBDA_SQS_QUEUE_NAMES`
+- `AUTH_SYNC_LAMBDA_SQS_BATCH_SIZE`
+- `AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX`
 - `NOTIFICACAO_LAMBDA_FUNCTION_NAME`
 - `NOTIFICACAO_LAMBDA_ROLE_ARN` ou `NOTIFICACAO_LAMBDA_ROLE_NAME`
 - `NOTIFICACAO_API_GATEWAY_ROUTE_KEYS`
@@ -256,7 +292,7 @@ No workflow de `lab`, `*_LAMBDA_ROLE_NAME` usa `LabRole` como default. Se `*_LAM
 
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
 
-O deploy da `auth-lambda` usa `AUTH_DB_BOOTSTRAP_MODE=k8s` no workflow de `lab`, criando um Job temporário com `postgres:16` dentro do EKS para executar o `psql` contra o RDS privado. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas em execução manual a partir de uma rede com rota direta para o endpoint do RDS. O modo `auto` usa `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos. Por padrão, `BOOTSTRAP_AUTH_DB_SCHEMA=true` cria as tabelas `pessoa`, `papel`, `usuario` e `usuario_papel`, além do seed mínimo de usuários do laboratório.
+O deploy da `auth-lambda` usa `AUTH_DB_BOOTSTRAP_MODE=k8s` no workflow de `lab`, criando um Job temporário com `postgres:16` dentro do EKS para executar o `psql` contra o RDS privado. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas em execução manual a partir de uma rede com rota direta para o endpoint do RDS. O modo `auto` usa `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos. Por padrão, `BOOTSTRAP_AUTH_DB_SCHEMA=true` cria as tabelas `pessoa`, `papel`, `usuario`, `usuario_papel`, `credencial_ativacao` e `evento_processado`, além do seed mínimo de usuários do laboratório. A `auth-sync-lambda` é implantada em seguida e reutiliza esse schema.
 
 Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for informado, o deploy da `notificacao-lambda` em `lab` assume este fallback seguro:
 

@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lambda-modules.sh"
 
 MODULE="${1:-${LAMBDA_MODULE:-}}"
 if [[ -z "${MODULE}" ]]; then
-  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda>" >&2
+  echo "Uso: $(basename "$0") <auth-lambda|auth-sync-lambda|notificacao-lambda>" >&2
   exit 1
 fi
 
@@ -121,7 +121,11 @@ OFICINA_AUTH_ISSUER="${OFICINA_AUTH_ISSUER:-}"
 OFICINA_AUTH_AUDIENCE="${OFICINA_AUTH_AUDIENCE:-oficina-os-service,oficina-billing-service,oficina-execution-service}"
 OFICINA_AUTH_SCOPE="${OFICINA_AUTH_SCOPE:-oficina-app}"
 OFICINA_AUTH_KEY_ID="${OFICINA_AUTH_KEY_ID:-oficina-lab-rsa}"
-ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY ATTACH_API_GATEWAY true)"
+api_gateway_attach_generic_var="ATTACH_API_GATEWAY"
+if [[ "${LAMBDA_USES_SQS}" == "true" ]]; then
+  api_gateway_attach_generic_var=""
+fi
+ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY "${api_gateway_attach_generic_var}" "${LAMBDA_ATTACH_API_GATEWAY_DEFAULT}")"
 API_GATEWAY_ID="$(pick_module_var API_GATEWAY_ID API_GATEWAY_ID "")"
 API_GATEWAY_NAME="$(pick_module_var API_GATEWAY_NAME API_GATEWAY_NAME "${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}")"
 # Mantem compatibilidade com variavel legada de rota unica; o deploy usa API_GATEWAY_ROUTE_KEYS.
@@ -130,6 +134,8 @@ API_GATEWAY_ROUTE_KEY="$(pick_module_var API_GATEWAY_ROUTE_KEY API_GATEWAY_ROUTE
 API_GATEWAY_ROUTE_KEYS="$(pick_module_var API_GATEWAY_ROUTE_KEYS API_GATEWAY_ROUTE_KEYS "${LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT}")"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
+SQS_QUEUE_NAMES="$(pick_module_var LAMBDA_SQS_QUEUE_NAMES SQS_QUEUE_NAMES "${LAMBDA_SQS_QUEUE_NAMES_DEFAULT}")"
+SQS_BATCH_SIZE="$(pick_module_var LAMBDA_SQS_BATCH_SIZE SQS_BATCH_SIZE 10)"
 NOTIFICACAO_MAILHOG_NLB_NAME="${NOTIFICACAO_MAILHOG_NLB_NAME:-}"
 NOTIFICACAO_MAILER_USES_PRIVATE_MAILHOG="false"
 LAMBDA_CODE_S3_BUCKET=""
@@ -1008,14 +1014,40 @@ CREATE TABLE IF NOT EXISTS papel (
 CREATE TABLE IF NOT EXISTS usuario (
   id bigint PRIMARY KEY,
   pessoa_id bigint NOT NULL UNIQUE REFERENCES pessoa(id),
-  password varchar(255) NOT NULL,
-  status varchar(255) NOT NULL
+  usuario_operacional_id uuid,
+  password varchar(255),
+  status varchar(255) NOT NULL,
+  ultimo_evento_operacional_em timestamptz
 );
+
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS usuario_operacional_id uuid;
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS ultimo_evento_operacional_em timestamptz;
+ALTER TABLE usuario ALTER COLUMN password DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_operacional_id
+  ON usuario (usuario_operacional_id);
 
 CREATE TABLE IF NOT EXISTS usuario_papel (
   usuario_id bigint NOT NULL REFERENCES usuario(id),
   papel_id bigint NOT NULL REFERENCES papel(id),
   PRIMARY KEY (usuario_id, papel_id)
+);
+
+CREATE TABLE IF NOT EXISTS credencial_ativacao (
+  id uuid PRIMARY KEY,
+  usuario_id bigint NOT NULL UNIQUE REFERENCES usuario(id),
+  token_hash varchar(64) NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL,
+  created_by varchar(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evento_processado (
+  consumer varchar(100) NOT NULL,
+  event_id uuid NOT NULL,
+  event_type varchar(100) NOT NULL,
+  processed_at timestamptz NOT NULL,
+  PRIMARY KEY (consumer, event_id)
 );
 
 INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
@@ -1246,14 +1278,40 @@ CREATE TABLE IF NOT EXISTS papel (
 CREATE TABLE IF NOT EXISTS usuario (
   id bigint PRIMARY KEY,
   pessoa_id bigint NOT NULL UNIQUE REFERENCES pessoa(id),
-  password varchar(255) NOT NULL,
-  status varchar(255) NOT NULL
+  usuario_operacional_id uuid,
+  password varchar(255),
+  status varchar(255) NOT NULL,
+  ultimo_evento_operacional_em timestamptz
 );
+
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS usuario_operacional_id uuid;
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS ultimo_evento_operacional_em timestamptz;
+ALTER TABLE usuario ALTER COLUMN password DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_operacional_id
+  ON usuario (usuario_operacional_id);
 
 CREATE TABLE IF NOT EXISTS usuario_papel (
   usuario_id bigint NOT NULL REFERENCES usuario(id),
   papel_id bigint NOT NULL REFERENCES papel(id),
   PRIMARY KEY (usuario_id, papel_id)
+);
+
+CREATE TABLE IF NOT EXISTS credencial_ativacao (
+  id uuid PRIMARY KEY,
+  usuario_id bigint NOT NULL UNIQUE REFERENCES usuario(id),
+  token_hash varchar(64) NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  created_at timestamptz NOT NULL,
+  created_by varchar(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evento_processado (
+  consumer varchar(100) NOT NULL,
+  event_id uuid NOT NULL,
+  event_type varchar(100) NOT NULL,
+  processed_at timestamptz NOT NULL,
+  PRIMARY KEY (consumer, event_id)
 );
 
 INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
@@ -1596,6 +1654,67 @@ ensure_api_gateway_integration() {
   fi
 }
 
+ensure_sqs_event_source_mappings() {
+  if [[ "${LAMBDA_USES_SQS}" != "true" ]]; then
+    return
+  fi
+  if ! [[ "${SQS_BATCH_SIZE}" =~ ^[0-9]+$ ]] || ((SQS_BATCH_SIZE < 1 || SQS_BATCH_SIZE > 10)); then
+    echo "SQS_BATCH_SIZE deve ser um inteiro entre 1 e 10: ${SQS_BATCH_SIZE}" >&2
+    exit 1
+  fi
+
+  local queue_name
+  local queue_url
+  local queue_arn
+  local mapping_uuid
+  IFS=';' read -r -a queue_names <<<"${SQS_QUEUE_NAMES}"
+  for queue_name in "${queue_names[@]}"; do
+    queue_name="$(trim "${queue_name}")"
+    if [[ -z "${queue_name}" ]]; then
+      continue
+    fi
+
+    log "Garantindo event source mapping da fila ${queue_name}"
+    queue_url="$(
+      aws --region "${AWS_REGION}" sqs get-queue-url \
+        --queue-name "${queue_name}" \
+        --query 'QueueUrl' \
+        --output text
+    )"
+    require_non_empty "${queue_url}" "queue_url:${queue_name}"
+    queue_arn="$(
+      aws --region "${AWS_REGION}" sqs get-queue-attributes \
+        --queue-url "${queue_url}" \
+        --attribute-names QueueArn \
+        --query 'Attributes.QueueArn' \
+        --output text
+    )"
+    require_non_empty "${queue_arn}" "queue_arn:${queue_name}"
+
+    mapping_uuid="$(
+      aws --region "${AWS_REGION}" lambda list-event-source-mappings \
+        --function-name "${LAMBDA_FUNCTION_NAME}" \
+        --event-source-arn "${queue_arn}" \
+        --query 'EventSourceMappings[0].UUID' \
+        --output text
+    )"
+    if [[ -n "${mapping_uuid}" && "${mapping_uuid}" != "None" ]]; then
+      aws --region "${AWS_REGION}" lambda update-event-source-mapping \
+        --uuid "${mapping_uuid}" \
+        --batch-size "${SQS_BATCH_SIZE}" \
+        --function-response-types ReportBatchItemFailures \
+        --enabled >/dev/null
+    else
+      aws --region "${AWS_REGION}" lambda create-event-source-mapping \
+        --function-name "${LAMBDA_FUNCTION_NAME}" \
+        --event-source-arn "${queue_arn}" \
+        --batch-size "${SQS_BATCH_SIZE}" \
+        --function-response-types ReportBatchItemFailures \
+        --enabled >/dev/null
+    fi
+  done
+}
+
 validate_json_object() {
   local json_value="$1"
   local name="$2"
@@ -1862,7 +1981,13 @@ if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
       authorize_db_ingress "${db_group_id}" "${lambda_sg_id}" "${db_port}"
     done
 
-    ensure_auth_db_credentials "${db_master_secret_arn}" "${db_master_username}"
+    if [[ "${LAMBDA_BOOTSTRAPS_DATABASE}" == "true" ]]; then
+      ensure_auth_db_credentials "${db_master_secret_arn}" "${db_master_username}"
+    else
+      load_auth_db_credentials_from_secret
+      require_non_empty "${QUARKUS_DATASOURCE_USERNAME}" "QUARKUS_DATASOURCE_USERNAME"
+      require_non_empty "${QUARKUS_DATASOURCE_PASSWORD}" "QUARKUS_DATASOURCE_PASSWORD"
+    fi
   fi
 
   vpc_config="SubnetIds=${LAMBDA_SUBNET_IDS},SecurityGroupIds=${lambda_sg_id}"
@@ -1906,7 +2031,7 @@ if [[ "${LAMBDA_USES_DATABASE}" == "true" && "${LAMBDA_SECRET_INJECTION_MODE}" =
   && [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
   candidate_auth_db_username_secret_name="$(auth_db_secret_field_name username)"
   candidate_auth_db_password_secret_name="$(auth_db_secret_field_name password)"
-  if [[ "${BOOTSTRAP_AUTH_DB_USER}" == "true" ]] \
+  if [[ "${LAMBDA_BOOTSTRAPS_DATABASE}" == "true" && "${BOOTSTRAP_AUTH_DB_USER}" == "true" ]] \
     || { secret_exists "${candidate_auth_db_username_secret_name}" && secret_exists "${candidate_auth_db_password_secret_name}"; }; then
     lambda_datasource_username=""
     lambda_datasource_password=""
@@ -1985,6 +2110,30 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
       OFICINA_AUTH_SCOPE: $oficina_auth_scope,
       OFICINA_AUTH_KEY_ID: $oficina_auth_key_id
     }' > "${desired_env_file}"
+elif [[ "${LAMBDA_USES_DATABASE}" == "true" ]]; then
+  jq -n \
+    --arg disable_signal_handlers "true" \
+    --arg lambda_artifact_version "${LAMBDA_ARTIFACT_VERSION}" \
+    --arg managed_extra_env_keys "${extra_env_keys_csv}" \
+    --arg secrets_manager_config_enabled "${lambda_secrets_manager_config_enabled}" \
+    --arg datasource_username "${lambda_datasource_username}" \
+    --arg datasource_password "${lambda_datasource_password}" \
+    --arg datasource_jdbc_url "${QUARKUS_DATASOURCE_JDBC_URL}" \
+    --arg auth_db_secret_name "${lambda_auth_db_secret_name}" \
+    --arg auth_db_username_secret_name "${lambda_auth_db_username_secret_name}" \
+    --arg auth_db_password_secret_name "${lambda_auth_db_password_secret_name}" \
+    '{
+      DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+      OFICINA_LAMBDA_ARTIFACT_VERSION: $lambda_artifact_version,
+      OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS: $managed_extra_env_keys,
+      SECRETS_MANAGER_CONFIG_ENABLED: $secrets_manager_config_enabled,
+      QUARKUS_DATASOURCE_USERNAME: $datasource_username,
+      QUARKUS_DATASOURCE_PASSWORD: $datasource_password,
+      QUARKUS_DATASOURCE_JDBC_URL: $datasource_jdbc_url,
+      AUTH_DB_SECRET_NAME: $auth_db_secret_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_: $auth_db_username_secret_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_: $auth_db_password_secret_name
+    }' > "${desired_env_file}"
 else
   jq -n \
     --arg disable_signal_handlers "true" \
@@ -2030,6 +2179,19 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
     "OFICINA_AUTH_AUDIENCE",
     "OFICINA_AUTH_SCOPE",
     "OFICINA_AUTH_KEY_ID"
+  ]'
+elif [[ "${LAMBDA_USES_DATABASE}" == "true" ]]; then
+  builtin_managed_keys='[
+    "DISABLE_SIGNAL_HANDLERS",
+    "OFICINA_LAMBDA_ARTIFACT_VERSION",
+    "OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS",
+    "SECRETS_MANAGER_CONFIG_ENABLED",
+    "QUARKUS_DATASOURCE_USERNAME",
+    "QUARKUS_DATASOURCE_PASSWORD",
+    "QUARKUS_DATASOURCE_JDBC_URL",
+    "AUTH_DB_SECRET_NAME",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_"
   ]'
 else
   builtin_managed_keys='[
@@ -2158,5 +2320,6 @@ aws --region "${AWS_REGION}" lambda wait function-active \
   --function-name "${LAMBDA_FUNCTION_NAME}"
 
 ensure_api_gateway_integration
+ensure_sqs_event_source_mappings
 
 log "Deploy concluido para ${LAMBDA_FUNCTION_NAME}"

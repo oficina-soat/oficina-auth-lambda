@@ -5,14 +5,9 @@ O repositório mantém dois workflows sem declarar GitHub Environment, para evit
 - `.github/workflows/open-pr-to-main.yml` (`Open PR To Main`)
 - `.github/workflows/deploy-lambda-lab.yml` (`Deploy Lambda Lab`)
 
-No fluxo principal da suíte, `Deploy Lambda Lab` é disparado pelo encadeamento `oficina-infra-k8s -> oficina-infra-db -> oficina-auth-lambda`. A execução manual fica reservada para operação pontual das Lambdas em `main`.
+No fluxo principal da suíte, aplique primeiro `Deploy Lab` no repositório unificado `oficina-infra` e depois execute `Deploy Lambda Lab` neste repositório. A ordem é obrigatória para que RDS, SNS/SQS e a policy consumidora existam antes da `auth-sync-lambda`.
 
-Depois que a suíte estiver implantada, a validação fim-a-fim principal deve ser rodada no `oficina-app`:
-
-```bash
-cd ../oficina-app
-MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
-```
+Depois que a suíte estiver implantada, valide as rotas públicas, a emissão e validação do JWT, a projeção de usuários e as DLQs pelos testes de aceitação e smoke tests dos componentes consumidores.
 
 ## Fluxo
 
@@ -40,7 +35,7 @@ MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
 `workflow_dispatch`:
 
 - deve ser executado em `main`
-- aceita `lambda_target=all|auth-lambda|notificacao-lambda`
+- aceita `lambda_target=all|auth-lambda|auth-sync-lambda|notificacao-lambda`
 - usa a mesma resolução de estado da AWS para decidir build e deploy
 
 ## Estado AWS
@@ -54,6 +49,13 @@ Auth:
 <AUTH_LAMBDA_ARTIFACT_PREFIX>/<arch>/<version>/oficina-auth-lambda-native.zip
 ```
 
+Sincronização de usuários:
+
+```text
+<AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX>/<arch>/<version>/function.zip
+<AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX>/<arch>/<version>/oficina-auth-sync-lambda-native.zip
+```
+
 Notificação:
 
 ```text
@@ -64,6 +66,7 @@ Notificação:
 Defaults:
 
 - `AUTH_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-auth-lambda`
+- `AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-auth-sync-lambda`
 - `NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-notificacao-lambda`
 
 O deploy grava `OFICINA_LAMBDA_ARTIFACT_VERSION` nas variáveis da Lambda. Esse valor permite que a action pule deploys repetidos quando a função já aponta para a versão do `pom.xml`.
@@ -108,6 +111,7 @@ Auth:
 - `AUTH_DB_USER`
 - `AUTH_DB_SECRET_NAME`
 - `BOOTSTRAP_AUTH_DB_SCHEMA`
+- `OFICINA_AUTH_ACTIVATION_TTL_HOURS` via `AUTH_LAMBDA_EXTRA_ENV_JSON`, quando for necessário alterar o padrão de 24 horas
 - `JWT_SECRET_NAME`
 - `JWT_SECRET_SOURCE`
 - `LAMBDA_SECRET_INJECTION_MODE`
@@ -119,9 +123,24 @@ Auth:
 
 `OFICINA_AUTH_AUDIENCE` aceita uma ou mais audiências separadas por vírgula, ponto-e-vírgula ou espaço. Quando não for informada, o workflow usa as audiências canônicas dos microsserviços: `oficina-os-service`, `oficina-billing-service` e `oficina-execution-service`.
 
-Quando `DB_NAME` não é informado, o workflow `Deploy Lambda Lab` usa `app`, que é o database legado esperado pela `auth-lambda`. Se o RDS não retornar `DBName`, o script de deploy também assume `app` e garante a existência do database antes de bootstrapar o usuário `AUTH_DB_USER`. Com `BOOTSTRAP_AUTH_DB_SCHEMA=true`, valor padrão do `lab`, o mesmo bootstrap cria as tabelas `pessoa`, `papel`, `usuario` e `usuario_papel`, além do seed mínimo de usuários do laboratório.
+Quando `DB_NAME` não é informado, o workflow `Deploy Lambda Lab` usa `app`, que é o database legado esperado pela `auth-lambda`. Se o RDS não retornar `DBName`, o script de deploy também assume `app` e garante a existência do database antes de bootstrapar o usuário `AUTH_DB_USER`. Com `BOOTSTRAP_AUTH_DB_SCHEMA=true`, valor padrão do `lab`, o mesmo bootstrap cria as tabelas `pessoa`, `papel`, `usuario`, `usuario_papel`, `credencial_ativacao` e `evento_processado`, além do seed mínimo de usuários do laboratório.
 
 O workflow usa `AUTH_DB_BOOTSTRAP_MODE=k8s` por padrão porque o RDS do laboratório fica privado na VPC. Nesse modo, o script atualiza o kubeconfig do `EKS_CLUSTER_NAME`, cria um Job Kubernetes efêmero com `AUTH_DB_BOOTSTRAP_IMAGE=postgres:16`, executa o `psql` dentro do cluster e remove os objetos temporários ao final. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas quando o executor tiver rota direta para o endpoint privado do RDS. O modo `auto` seleciona `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos.
+
+Sincronização de usuários:
+
+- `AUTH_SYNC_LAMBDA_FUNCTION_NAME`
+- `AUTH_SYNC_LAMBDA_ROLE_ARN` ou `AUTH_SYNC_LAMBDA_ROLE_NAME`
+- `AUTH_SYNC_LAMBDA_ATTACH_VPC`
+- `AUTH_SYNC_LAMBDA_VPC_ID`
+- `AUTH_SYNC_LAMBDA_SUBNET_IDS`
+- `AUTH_SYNC_LAMBDA_SECURITY_GROUP_NAME`
+- `AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX`
+- `AUTH_SYNC_LAMBDA_SQS_QUEUE_NAMES`
+- `AUTH_SYNC_LAMBDA_SQS_BATCH_SIZE`
+- `AUTH_SYNC_LAMBDA_EXTRA_ENV_JSON`
+
+A `auth-sync-lambda` não recebe rotas no API Gateway. O deploy cria ou atualiza os event source mappings das filas canônicas de `usuarioAdicionado`, `usuarioAtualizado` e `usuarioExcluido`, habilitando `ReportBatchItemFailures`. O tamanho do lote deve ficar entre 1 e 10. Como o schema pertence à autenticação HTTP, o job limita o deploy a uma Lambda por vez e processa `auth-lambda` antes de `auth-sync-lambda`.
 
 Notificação:
 

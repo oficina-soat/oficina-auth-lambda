@@ -1,6 +1,7 @@
 package br.com.oficina.autenticacao.domain;
 
 import br.com.oficina.autenticacao.domain.exceptions.CpfInvalidoException;
+import br.com.oficina.autenticacao.domain.exceptions.CredencialNaoAtivadaException;
 import br.com.oficina.autenticacao.domain.exceptions.CredenciaisObrigatoriasException;
 import br.com.oficina.autenticacao.domain.exceptions.SenhaInvalidaException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioInativoException;
@@ -85,6 +86,9 @@ public class AutenticarUsuarioUseCase {
             if (usuarioEntity.status != UsuarioStatus.ATIVO) {
                 throw new UsuarioInativoException();
             }
+            if (usuarioEntity.password == null || usuarioEntity.password.isBlank()) {
+                throw new CredencialNaoAtivadaException();
+            }
 
             boolean passwordMatches = timing.bcrypt(() -> BcryptUtil.matches(req.password(), usuarioEntity.password));
             if (!passwordMatches) {
@@ -144,7 +148,9 @@ public class AutenticarUsuarioUseCase {
         if (exception instanceof CpfInvalidoException) {
             return "invalid_cpf";
         }
-        if (exception instanceof UsuarioNaoEncontradoException || exception instanceof SenhaInvalidaException) {
+        if (exception instanceof UsuarioNaoEncontradoException
+                || exception instanceof SenhaInvalidaException
+                || exception instanceof CredencialNaoAtivadaException) {
             return "invalid_credentials";
         }
         if (exception instanceof UsuarioInativoException) {

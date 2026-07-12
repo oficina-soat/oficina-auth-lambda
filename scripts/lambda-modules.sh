@@ -5,6 +5,9 @@ normalize_lambda_module() {
     auth|auth-lambda)
       printf 'auth-lambda'
       ;;
+    auth-sync|auth-sync-lambda)
+      printf 'auth-sync-lambda'
+      ;;
     notificacao|notificacao-lambda)
       printf 'notificacao-lambda'
       ;;
@@ -15,7 +18,7 @@ normalize_lambda_module() {
 }
 
 all_lambda_modules() {
-  printf '%s\n' auth-lambda notificacao-lambda
+  printf '%s\n' auth-lambda auth-sync-lambda notificacao-lambda
 }
 
 load_lambda_module() {
@@ -31,10 +34,32 @@ load_lambda_module() {
       LAMBDA_ARTIFACT_PREFIX_DEFAULT="oficina/lab/lambda/oficina-auth-lambda"
       LAMBDA_EXTRA_ENV_JSON_DEFAULT="{}"
       LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT="POST /auth"
-      LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /auth;POST /auth/token;GET /.well-known/openid-configuration;GET /.well-known/jwks.json"
+      LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /auth;POST /auth/token;POST /auth/usuarios/{usuarioId}/ativacao;POST /auth/ativacoes;GET /.well-known/openid-configuration;GET /.well-known/jwks.json"
       LAMBDA_ENV_PREFIX="AUTH"
       LAMBDA_USES_DATABASE="true"
       LAMBDA_USES_JWT="true"
+      LAMBDA_BOOTSTRAPS_DATABASE="true"
+      LAMBDA_USES_SQS="false"
+      LAMBDA_SQS_QUEUE_NAMES_DEFAULT=""
+      LAMBDA_ATTACH_API_GATEWAY_DEFAULT="true"
+      LAMBDA_ATTACH_VPC_DEFAULT="true"
+      ;;
+    auth-sync-lambda)
+      LAMBDA_MODULE="${module}"
+      LAMBDA_MODULE_DIR="auth-sync-lambda"
+      LAMBDA_RELEASE_BASENAME="oficina-auth-sync-lambda"
+      LAMBDA_FUNCTION_NAME_DEFAULT="oficina-auth-sync-lambda-lab"
+      LAMBDA_ARTIFACT_PREFIX_DEFAULT="oficina/lab/lambda/oficina-auth-sync-lambda"
+      LAMBDA_EXTRA_ENV_JSON_DEFAULT="{}"
+      LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT=""
+      LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT=""
+      LAMBDA_ENV_PREFIX="AUTH_SYNC"
+      LAMBDA_USES_DATABASE="true"
+      LAMBDA_USES_JWT="false"
+      LAMBDA_BOOTSTRAPS_DATABASE="false"
+      LAMBDA_USES_SQS="true"
+      LAMBDA_SQS_QUEUE_NAMES_DEFAULT="oficina-os-usuario-adicionado-oficina-auth-sync-lambda;oficina-os-usuario-atualizado-oficina-auth-sync-lambda;oficina-os-usuario-excluido-oficina-auth-sync-lambda"
+      LAMBDA_ATTACH_API_GATEWAY_DEFAULT="false"
       LAMBDA_ATTACH_VPC_DEFAULT="true"
       ;;
     notificacao-lambda)
@@ -49,6 +74,10 @@ load_lambda_module() {
       LAMBDA_ENV_PREFIX="NOTIFICACAO"
       LAMBDA_USES_DATABASE="false"
       LAMBDA_USES_JWT="false"
+      LAMBDA_BOOTSTRAPS_DATABASE="false"
+      LAMBDA_USES_SQS="false"
+      LAMBDA_SQS_QUEUE_NAMES_DEFAULT=""
+      LAMBDA_ATTACH_API_GATEWAY_DEFAULT="true"
       LAMBDA_ATTACH_VPC_DEFAULT="true"
       ;;
   esac

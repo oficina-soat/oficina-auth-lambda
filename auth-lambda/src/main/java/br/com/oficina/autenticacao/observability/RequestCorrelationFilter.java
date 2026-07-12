@@ -25,6 +25,7 @@ public class RequestCorrelationFilter implements ContainerRequestFilter, Contain
     private static final Logger LOG = Logger.getLogger(RequestCorrelationFilter.class);
     private static final String REQUEST_ID_PROPERTY = "oficina.request_id";
     private static final String REQUEST_ID_HEADER = "X-Request-Id";
+    private static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
 
     @Context
     ResourceInfo resourceInfo;
@@ -42,7 +43,7 @@ public class RequestCorrelationFilter implements ContainerRequestFilter, Contain
     public void filter(ContainerRequestContext requestContext) throws IOException {
         String requestId = firstNonBlank(
                 requestContext.getHeaderString(REQUEST_ID_HEADER),
-                requestContext.getHeaderString("X-Correlation-Id"),
+                requestContext.getHeaderString(CORRELATION_ID_HEADER),
                 UUID.randomUUID().toString());
 
         requestContext.setProperty(REQUEST_ID_PROPERTY, requestId);
@@ -61,8 +62,13 @@ public class RequestCorrelationFilter implements ContainerRequestFilter, Contain
 
     @Override
     public void filter(ContainerRequestContext requestContext, ContainerResponseContext responseContext) throws IOException {
-        String requestId = (String) requestContext.getProperty(REQUEST_ID_PROPERTY);
+        String requestId = firstNonBlank(
+                (String) requestContext.getProperty(REQUEST_ID_PROPERTY),
+                requestContext.getHeaderString(REQUEST_ID_HEADER),
+                requestContext.getHeaderString(CORRELATION_ID_HEADER),
+                UUID.randomUUID().toString());
         responseContext.getHeaders().putSingle(REQUEST_ID_HEADER, requestId);
+        responseContext.getHeaders().putSingle(CORRELATION_ID_HEADER, requestId);
 
         MDC.put("request_id", requestId);
         MDC.put("http.method", requestContext.getMethod());

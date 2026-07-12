@@ -1,6 +1,7 @@
 package br.com.oficina.autenticacao.domain;
 
 import br.com.oficina.autenticacao.domain.exceptions.CpfInvalidoException;
+import br.com.oficina.autenticacao.domain.exceptions.CredencialNaoAtivadaException;
 import br.com.oficina.autenticacao.domain.exceptions.CredenciaisObrigatoriasException;
 import br.com.oficina.autenticacao.domain.exceptions.SenhaInvalidaException;
 import br.com.oficina.autenticacao.domain.exceptions.UsuarioInativoException;
@@ -157,6 +158,44 @@ class AutenticarUsuarioUseCaseTest {
 
             assertEquals("Credenciais inválidas", exception.getMessage());
             assertEquals("Usuário inativo", exception.motivo());
+        }
+    }
+
+    @Test
+    void shouldFailWhenUserIsBlocked() {
+        UsuarioEntity usuario = usuario(
+                "84191404067",
+                BcryptUtil.bcryptHash("secret"),
+                UsuarioStatus.BLOQUEADO,
+                "admin");
+        PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
+
+        try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class)) {
+            panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
+
+            UsuarioInativoException exception = assertThrowsInChain(
+                    UsuarioInativoException.class,
+                    () -> useCase.execute(new AutenticarUsuarioRequest("84191404067", "secret")));
+
+            assertEquals("Usuário inativo", exception.motivo());
+        }
+    }
+
+    @Test
+    void shouldFailWhenCredentialWasNotActivated() {
+        UsuarioEntity usuario = usuario("84191404067", null, UsuarioStatus.ATIVO, "admin");
+        PanacheQuery<UsuarioEntity> query = mockPanacheQuery();
+
+        try (MockedStatic<PanacheEntityBase> panacheEntityBaseMock = Mockito.mockStatic(PanacheEntityBase.class)) {
+            panacheEntityBaseMock.when(() -> PanacheEntityBase.find(UsuarioEntity.FIND_BY_DOCUMENTO_QUERY, "84191404067")).thenReturn(query);
+            when(query.singleResultOptional()).thenReturn(Optional.of(usuario));
+
+            CredencialNaoAtivadaException exception = assertThrowsInChain(
+                    CredencialNaoAtivadaException.class,
+                    () -> useCase.execute(new AutenticarUsuarioRequest("84191404067", "secret")));
+
+            assertEquals("Credencial não ativada", exception.motivo());
         }
     }
 

@@ -7,12 +7,17 @@
     <parent>
         <groupId>br.com.oficina</groupId>
         <artifactId>oficina-lambda-parent</artifactId>
-        <version>1.0.23</version>
+        <version>1.1.0</version>
     </parent>
 
     <artifactId>auth-lambda</artifactId>
 
     <dependencies>
+        <dependency>
+            <groupId>br.com.oficina</groupId>
+            <artifactId>auth-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
@@ -61,17 +66,6 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-elytron-security-common</artifactId>
         </dependency>
-        <dependency>
-            <groupId>io.quarkiverse.amazonservices</groupId>
-            <artifactId>quarkus-amazon-secretsmanager</artifactId>
-            <version>${quarkiverse.amazon.services.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>url-connection-client</artifactId>
-            <version>${aws.sdk.version}</version>
-        </dependency>
-
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jacoco</artifactId>

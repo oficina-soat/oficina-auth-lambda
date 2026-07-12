@@ -6,7 +6,7 @@ source "${SCRIPT_DIR}/lambda-modules.sh"
 
 MODULE="${1:-${LAMBDA_MODULE:-}}"
 if [[ -z "${MODULE}" ]]; then
-  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda>" >&2
+  echo "Uso: $(basename "$0") <auth-lambda|auth-sync-lambda|notificacao-lambda>" >&2
   exit 1
 fi
 
