@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lambda-modules.sh"
 
 MODULE="${1:-${LAMBDA_MODULE:-}}"
 if [[ -z "${MODULE}" ]]; then
-  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda>" >&2
+  echo "Uso: $(basename "$0") <auth-lambda|auth-sync-lambda|notificacao-lambda>" >&2
   exit 1
 fi
 
@@ -121,7 +121,7 @@ OFICINA_AUTH_ISSUER="${OFICINA_AUTH_ISSUER:-}"
 OFICINA_AUTH_AUDIENCE="${OFICINA_AUTH_AUDIENCE:-oficina-os-service,oficina-billing-service,oficina-execution-service}"
 OFICINA_AUTH_SCOPE="${OFICINA_AUTH_SCOPE:-oficina-app}"
 OFICINA_AUTH_KEY_ID="${OFICINA_AUTH_KEY_ID:-oficina-lab-rsa}"
-ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY ATTACH_API_GATEWAY true)"
+ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY ATTACH_API_GATEWAY "${LAMBDA_ATTACH_API_GATEWAY_DEFAULT}")"
 API_GATEWAY_ID="$(pick_module_var API_GATEWAY_ID API_GATEWAY_ID "")"
 API_GATEWAY_NAME="$(pick_module_var API_GATEWAY_NAME API_GATEWAY_NAME "${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}")"
 # Mantem compatibilidade com variavel legada de rota unica; o deploy usa API_GATEWAY_ROUTE_KEYS.
@@ -1018,6 +1018,35 @@ CREATE TABLE IF NOT EXISTS usuario_papel (
   PRIMARY KEY (usuario_id, papel_id)
 );
 
+ALTER TABLE pessoa ADD COLUMN IF NOT EXISTS external_id uuid;
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS external_id uuid;
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS last_event_at timestamptz;
+ALTER TABLE usuario ALTER COLUMN password DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_pessoa_external_id ON pessoa (external_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_usuario_external_id ON usuario (external_id);
+
+CREATE TABLE IF NOT EXISTS auth_consumed_event (
+  event_id uuid PRIMARY KEY,
+  aggregate_id varchar(255) NOT NULL,
+  event_type varchar(100) NOT NULL,
+  occurred_at timestamptz NOT NULL,
+  consumed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_activation_token (
+  id uuid PRIMARY KEY,
+  usuario_id bigint NOT NULL REFERENCES usuario(id),
+  token_hash varchar(64) NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  invalidated_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS ix_auth_consumed_event_aggregate
+  ON auth_consumed_event (aggregate_id, occurred_at);
+CREATE INDEX IF NOT EXISTS ix_auth_activation_token_usuario
+  ON auth_activation_token (usuario_id, expires_at);
+
 INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
   (1, '84191404067', 'FISICA', 'Administrador Laboratorio'),
   (2, '36655462007', 'FISICA', 'Mecanico Laboratorio'),
@@ -1255,6 +1284,35 @@ CREATE TABLE IF NOT EXISTS usuario_papel (
   papel_id bigint NOT NULL REFERENCES papel(id),
   PRIMARY KEY (usuario_id, papel_id)
 );
+
+ALTER TABLE pessoa ADD COLUMN IF NOT EXISTS external_id uuid;
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS external_id uuid;
+ALTER TABLE usuario ADD COLUMN IF NOT EXISTS last_event_at timestamptz;
+ALTER TABLE usuario ALTER COLUMN password DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_pessoa_external_id ON pessoa (external_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_usuario_external_id ON usuario (external_id);
+
+CREATE TABLE IF NOT EXISTS auth_consumed_event (
+  event_id uuid PRIMARY KEY,
+  aggregate_id varchar(255) NOT NULL,
+  event_type varchar(100) NOT NULL,
+  occurred_at timestamptz NOT NULL,
+  consumed_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_activation_token (
+  id uuid PRIMARY KEY,
+  usuario_id bigint NOT NULL REFERENCES usuario(id),
+  token_hash varchar(64) NOT NULL UNIQUE,
+  expires_at timestamptz NOT NULL,
+  used_at timestamptz,
+  invalidated_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS ix_auth_consumed_event_aggregate
+  ON auth_consumed_event (aggregate_id, occurred_at);
+CREATE INDEX IF NOT EXISTS ix_auth_activation_token_usuario
+  ON auth_activation_token (usuario_id, expires_at);
 
 INSERT INTO pessoa (id, documento, tipo_pessoa, nome) VALUES
   (1, '84191404067', 'FISICA', 'Administrador Laboratorio'),
@@ -2158,5 +2216,19 @@ aws --region "${AWS_REGION}" lambda wait function-active \
   --function-name "${LAMBDA_FUNCTION_NAME}"
 
 ensure_api_gateway_integration
+
+if [[ "${LAMBDA_MODULE}" == "auth-sync-lambda" ]]; then
+  while IFS= read -r mapping_uuid; do
+    [[ -n "${mapping_uuid}" ]] || continue
+    aws --region "${AWS_REGION}" lambda update-event-source-mapping \
+      --uuid "${mapping_uuid}" \
+      --enabled >/dev/null
+  done < <(
+    aws --region "${AWS_REGION}" lambda list-event-source-mappings \
+      --function-name "${LAMBDA_FUNCTION_NAME}" \
+      --query 'EventSourceMappings[].UUID' \
+      --output text | tr '\t' '\n'
+  )
+fi
 
 log "Deploy concluido para ${LAMBDA_FUNCTION_NAME}"

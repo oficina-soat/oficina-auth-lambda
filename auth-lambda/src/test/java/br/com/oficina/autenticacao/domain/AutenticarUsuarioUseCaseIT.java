@@ -90,6 +90,26 @@ class AutenticarUsuarioUseCaseIT {
 
     @Test
     @TestTransaction
+    void shouldRejectBlockedUser() {
+        persistUsuario(DOCUMENTO_USUARIO_INATIVO, "secret", UsuarioStatus.BLOQUEADO, "recepcionista");
+
+        assertThrows(
+                UsuarioInativoException.class,
+                () -> useCase.execute(new AutenticarUsuarioRequest(DOCUMENTO_USUARIO_INATIVO, "secret")));
+    }
+
+    @Test
+    @TestTransaction
+    void shouldRejectUserWithoutActivatedCredential() {
+        persistUsuario(DOCUMENTO_MULTIPLOS_PAPEIS, null, UsuarioStatus.ATIVO, "recepcionista");
+
+        assertThrows(
+                UsuarioInativoException.class,
+                () -> useCase.execute(new AutenticarUsuarioRequest(DOCUMENTO_MULTIPLOS_PAPEIS, "secret")));
+    }
+
+    @Test
+    @TestTransaction
     void shouldRejectInvalidCpfBeforeAuthentication() {
         CpfInvalidoException exception = assertThrows(
                 CpfInvalidoException.class,
@@ -114,7 +134,7 @@ class AutenticarUsuarioUseCaseIT {
 
         UsuarioEntity usuario = new UsuarioEntity();
         usuario.pessoa = pessoa;
-        usuario.password = BcryptUtil.bcryptHash(password);
+        usuario.password = password == null ? null : BcryptUtil.bcryptHash(password);
         usuario.status = status;
         usuario.papelEntities.addAll(papelEntities);
 

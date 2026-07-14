@@ -13,8 +13,10 @@ import jakarta.persistence.ManyToMany;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Table(name = "usuario")
 @Entity
@@ -30,8 +32,14 @@ public class UsuarioEntity extends PanacheEntity {
     @JoinColumn(name = "pessoa_id", nullable = false, unique = true)
     public PessoaEntity pessoa;
 
-    @Column(name = "password", nullable = false)
+    @Column(name = "external_id", unique = true)
+    public UUID externalId;
+
+    @Column(name = "password")
     public String password;
+
+    @Column(name = "last_event_at")
+    public OffsetDateTime lastEventAt;
 
     @ManyToMany
     @JoinTable(
@@ -49,6 +57,10 @@ public class UsuarioEntity extends PanacheEntity {
                 .singleResultOptional()
                 .map(UsuarioEntity.class::cast)
                 .orElse(null);
+    }
+
+    public static UsuarioEntity findByExternalId(UUID externalId) {
+        return UsuarioEntity.find("externalId", externalId).firstResult();
     }
 
     public String documento() {

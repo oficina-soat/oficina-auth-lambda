@@ -54,10 +54,12 @@ common_path_impacts_both() {
 
 base_commit="$(resolve_base_ref)"
 auth_impacted="false"
+auth_sync_impacted="false"
 notificacao_impacted="false"
 
 if [[ -z "${base_commit}" ]]; then
   auth_impacted="true"
+  auth_sync_impacted="true"
   notificacao_impacted="true"
   changed_files="<sem-base>"
 else
@@ -70,6 +72,9 @@ else
       auth-lambda/*)
         auth_impacted="true"
         ;;
+      auth-sync-lambda/*)
+        auth_sync_impacted="true"
+        ;;
       notificacao-lambda/*)
         notificacao_impacted="true"
         ;;
@@ -77,6 +82,7 @@ else
 
     if common_path_impacts_both "${changed_file}"; then
       auth_impacted="true"
+      auth_sync_impacted="true"
       notificacao_impacted="true"
     fi
   done <<< "${changed_files}"
@@ -85,6 +91,9 @@ fi
 impacted_modules=()
 if [[ "${auth_impacted}" == "true" ]]; then
   impacted_modules+=("auth-lambda")
+fi
+if [[ "${auth_sync_impacted}" == "true" ]]; then
+  impacted_modules+=("auth-sync-lambda")
 fi
 if [[ "${notificacao_impacted}" == "true" ]]; then
   impacted_modules+=("notificacao-lambda")
@@ -101,6 +110,7 @@ if [[ ${#impacted_modules[@]} -gt 0 ]]; then
 fi
 
 set_output auth_lambda_impacted "${auth_impacted}"
+set_output auth_sync_lambda_impacted "${auth_sync_impacted}"
 set_output notificacao_lambda_impacted "${notificacao_impacted}"
 set_output impacted_modules_csv "${impacted_modules_csv}"
 set_output impacted_modules_json "${impacted_modules_json}"
@@ -110,5 +120,6 @@ set_output base_ref "${base_commit}"
 printf 'Base ref: %s\n' "${base_commit:-<indisponivel>}" >&2
 printf 'Arquivos alterados:\n%s\n' "${changed_files:-<nenhum>}" >&2
 printf 'Impacto auth-lambda: %s\n' "${auth_impacted}" >&2
+printf 'Impacto auth-sync-lambda: %s\n' "${auth_sync_impacted}" >&2
 printf 'Impacto notificacao-lambda: %s\n' "${notificacao_impacted}" >&2
 printf 'Modulos impactados: %s\n' "${impacted_modules_csv:-<nenhum>}" >&2

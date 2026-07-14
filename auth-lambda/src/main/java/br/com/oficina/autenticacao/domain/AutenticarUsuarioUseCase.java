@@ -82,7 +82,7 @@ public class AutenticarUsuarioUseCase {
             if (usuarioEntity == null) {
                 throw new UsuarioNaoEncontradoException();
             }
-            if (usuarioEntity.status != UsuarioStatus.ATIVO) {
+            if (usuarioEntity.status != UsuarioStatus.ATIVO || usuarioEntity.password == null) {
                 throw new UsuarioInativoException();
             }
 

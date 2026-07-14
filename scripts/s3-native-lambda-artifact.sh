@@ -10,7 +10,7 @@ MODULE="${1:-${LAMBDA_MODULE:-}}"
 COMMAND="${2:-}"
 
 if [[ -z "${MODULE}" || -z "${COMMAND}" ]]; then
-  echo "Uso: $(basename "$0") <auth-lambda|notificacao-lambda> restore|store" >&2
+  echo "Uso: $(basename "$0") <auth-lambda|auth-sync-lambda|notificacao-lambda> restore|store" >&2
   exit 1
 fi
 
