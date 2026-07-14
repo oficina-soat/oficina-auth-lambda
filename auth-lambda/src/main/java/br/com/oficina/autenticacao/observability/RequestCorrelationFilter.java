@@ -61,7 +61,11 @@ public class RequestCorrelationFilter implements ContainerRequestFilter, Contain
 
     @Override
     public void filter(ContainerRequestContext requestContext, ContainerResponseContext responseContext) throws IOException {
-        String requestId = (String) requestContext.getProperty(REQUEST_ID_PROPERTY);
+        String requestId = firstNonBlank(
+                (String) requestContext.getProperty(REQUEST_ID_PROPERTY),
+                requestContext.getHeaderString(REQUEST_ID_HEADER),
+                requestContext.getHeaderString("X-Correlation-Id"),
+                UUID.randomUUID().toString());
         responseContext.getHeaders().putSingle(REQUEST_ID_HEADER, requestId);
 
         MDC.put("request_id", requestId);
