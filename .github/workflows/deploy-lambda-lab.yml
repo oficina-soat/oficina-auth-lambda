@@ -427,7 +427,10 @@ jobs:
       MASTER_SECRET_ARN: ${{ vars.MASTER_SECRET_ARN }}
       MASTER_DB_USER: ${{ vars.MASTER_DB_USER }}
       MASTER_DB_PASSWORD: ${{ secrets.MASTER_DB_PASSWORD }}
-      BOOTSTRAP_AUTH_DB_USER: ${{ vars.BOOTSTRAP_AUTH_DB_USER || 'true' }}
+      # O usuario/secret e compartilhado por auth-lambda e auth-sync-lambda.
+      # Apenas um job da matriz pode executar o bootstrap para evitar corrida
+      # na criacao e remocao dos recursos Kubernetes temporarios.
+      BOOTSTRAP_AUTH_DB_USER: ${{ matrix.module == 'auth-lambda' && (vars.BOOTSTRAP_AUTH_DB_USER || 'true') || 'false' }}
       AUTH_DB_BOOTSTRAP_MODE: ${{ vars.AUTH_DB_BOOTSTRAP_MODE || 'k8s' }}
       AUTH_DB_BOOTSTRAP_NAMESPACE: ${{ vars.AUTH_DB_BOOTSTRAP_NAMESPACE || 'default' }}
       AUTH_DB_BOOTSTRAP_IMAGE: ${{ vars.AUTH_DB_BOOTSTRAP_IMAGE || 'postgres:16' }}
