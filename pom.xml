@@ -6,11 +6,12 @@
 
     <groupId>br.com.oficina</groupId>
     <artifactId>oficina-lambda-parent</artifactId>
-    <version>1.0.24</version>
+    <version>1.1.0</version>
     <packaging>pom</packaging>
 
     <modules>
         <module>auth-lambda</module>
+        <module>auth-sync-lambda</module>
         <module>notificacao-lambda</module>
     </modules>
 

@@ -77,6 +77,7 @@ flowchart LR
 
 - `pom.xml`: POM pai com versão única do repositório
 - `auth-lambda/`: aplicação Quarkus da Lambda de autenticação
+- `auth-sync-lambda/`: consumidor assíncrono que projeta usuários e papéis no store de autenticação
 - `notificacao-lambda/`: aplicação Quarkus da Lambda de notificação
 - `scripts/`: automação de build nativo, cache S3, deploy, cleanup local e detecção de impacto
 - `.github/workflows/`: build/deploy do laboratório
@@ -157,7 +158,7 @@ No deploy da Lambda, esse bloco pode ser injetado em `AUTH_LAMBDA_EXTRA_ENV_JSON
 - para runtimes `provided.*`, o deploy valida se o ZIP contém `bootstrap` na raiz e usa o pacote nativo nomeado quando `function.zip` tiver sido sobrescrito por build JVM local
 - quando o estado da AWS exigir novo build em `main`, o push precisa trazer incremento de versão no `pom.xml`
 
-Como o `pom.xml` pai é comum, uma nova versão publicada normalmente gera artefatos versionados para as duas Lambdas.
+Como o `pom.xml` pai é comum, uma nova versão publicada normalmente gera artefatos versionados para as três Lambdas.
 
 ## Detecção de impacto por módulo
 
@@ -203,6 +204,7 @@ Notificação:
 
 ```bash
 ./scripts/build-native-lambda.sh auth-lambda
+./scripts/build-native-lambda.sh auth-sync-lambda
 ./scripts/build-native-lambda.sh notificacao-lambda
 ```
 
@@ -210,6 +212,8 @@ Artefatos gerados:
 
 - `auth-lambda/target/function.zip`
 - `auth-lambda/target/oficina-auth-lambda-native.zip`
+- `auth-sync-lambda/target/function.zip`
+- `auth-sync-lambda/target/oficina-auth-sync-lambda-native.zip`
 - `notificacao-lambda/target/function.zip`
 - `notificacao-lambda/target/oficina-notificacao-lambda-native.zip`
 
@@ -217,6 +221,7 @@ Artefatos gerados:
 
 ```bash
 ./scripts/deploy-native-lambda.sh auth-lambda
+./scripts/deploy-native-lambda.sh auth-sync-lambda
 ./scripts/deploy-native-lambda.sh notificacao-lambda
 ```
 
@@ -229,6 +234,11 @@ Defaults operacionais:
   - usa `DB_NAME=app` como fallback quando o RDS não informa `DBName`
   - emite JWT com `aud` para `oficina-os-service`, `oficina-billing-service` e `oficina-execution-service` por padrão; `OFICINA_AUTH_AUDIENCE` aceita lista separada por vírgula, ponto-e-vírgula ou espaço
   - continua bootstrapando usuário, schema e seed mínimo do RDS por Job efêmero no EKS e reutilizando `JWT_SECRET_NAME=oficina/lab/jwt`
+- `auth-sync-lambda`
+  - função padrão: `oficina-auth-sync-lambda-lab`
+  - prefixo S3 padrão: `oficina/lab/lambda/oficina-auth-sync-lambda`
+  - consome eventos de usuário e atualiza a projeção no mesmo PostgreSQL da autenticação
+  - não publica rotas no API Gateway; os event source mappings são habilitados somente após o pacote funcional ser implantado
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`
@@ -308,7 +318,7 @@ Resumo do fluxo:
   - atualiza a Lambda quando a versão registrada em `OFICINA_LAMBDA_ARTIFACT_VERSION` não bate com o `pom.xml`
   - falha antes do build se a AWS exigir novo artefato e o push em `main` não tiver incrementado a versão
 
-O workflow também pode ser executado manualmente em `main`, com `lambda_target=all|auth-lambda|notificacao-lambda`.
+O workflow também pode ser executado manualmente em `main`, com `lambda_target=all|auth-lambda|auth-sync-lambda|notificacao-lambda`.
 
 Detalhes operacionais: [docs/github-actions.md](docs/github-actions.md)
 
@@ -317,7 +327,7 @@ Detalhes operacionais: [docs/github-actions.md](docs/github-actions.md)
 Build/deploy idempotente:
 
 ```text
-Actions -> Deploy Lambda Lab -> Run workflow -> lambda_target=all|auth-lambda|notificacao-lambda
+Actions -> Deploy Lambda Lab -> Run workflow -> lambda_target=all|auth-lambda|auth-sync-lambda|notificacao-lambda
 ```
 
 ## Validação local

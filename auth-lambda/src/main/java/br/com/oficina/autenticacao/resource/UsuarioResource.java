@@ -1,6 +1,10 @@
 package br.com.oficina.autenticacao.resource;
 
 import br.com.oficina.autenticacao.domain.AutenticarUsuarioUseCase;
+import br.com.oficina.autenticacao.domain.AtivacaoCredencialService;
+import br.com.oficina.autenticacao.resource.dto.AtivacaoRequest;
+import br.com.oficina.autenticacao.resource.dto.AtivacaoTokenResponse;
+import jakarta.annotation.security.RolesAllowed;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import jakarta.inject.Inject;
@@ -8,7 +12,10 @@ import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import java.util.UUID;
 
 @Path("/auth")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -16,6 +23,7 @@ import jakarta.ws.rs.core.MediaType;
 public class UsuarioResource {
 
     @Inject AutenticarUsuarioUseCase autenticarUsuarioUseCase;
+    @Inject AtivacaoCredencialService ativacaoCredencialService;
 
     UsuarioResource(AutenticarUsuarioUseCase autenticarUsuarioUseCase) {
         this.autenticarUsuarioUseCase = autenticarUsuarioUseCase;
@@ -30,5 +38,20 @@ public class UsuarioResource {
     @Path("/token")
     public AutenticarUsuarioResponse token(AutenticarUsuarioRequest request) {
         return autenticar(request);
+    }
+
+    @POST
+    @Path("/usuarios/{usuarioId}/ativacao")
+    @RolesAllowed("administrativo")
+    public Response solicitarAtivacao(@PathParam("usuarioId") UUID usuarioId) {
+        AtivacaoTokenResponse response = ativacaoCredencialService.solicitar(usuarioId);
+        return Response.status(Response.Status.CREATED).entity(response).build();
+    }
+
+    @POST
+    @Path("/ativacoes")
+    public Response ativar(AtivacaoRequest request) {
+        ativacaoCredencialService.ativar(request);
+        return Response.noContent().build();
     }
 }

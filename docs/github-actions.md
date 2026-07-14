@@ -43,7 +43,7 @@ MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
 `workflow_dispatch`:
 
 - deve ser executado em `main`
-- aceita `lambda_target=all|auth-lambda|notificacao-lambda`
+- aceita `lambda_target=all|auth-lambda|auth-sync-lambda|notificacao-lambda`
 - usa a mesma resolução de estado da AWS para decidir build e deploy
 
 ## Estado AWS
