@@ -526,6 +526,109 @@ jobs:
           chmod +x ./scripts/*.sh
           ./scripts/deploy-native-lambda.sh "${{ matrix.module }}"
 
+  publish_github_release:
+    name: publish-github-release
+    if: >
+      always() &&
+      github.ref_name == 'main' &&
+      needs.resolve_aws_state.outputs.version_bump_required != 'true' &&
+      needs.resolve_aws_state.outputs.selected_modules_csv == 'auth-lambda,notificacao-lambda' &&
+      (
+        needs.build_native_artifacts.result == 'success' ||
+        needs.build_native_artifacts.result == 'skipped'
+      ) &&
+      (
+        needs.deploy_lambda.result == 'success' ||
+        needs.deploy_lambda.result == 'skipped'
+      )
+    runs-on: ubuntu-latest
+    needs:
+      - resolve_aws_state
+      - build_native_artifacts
+      - deploy_lambda
+    permissions:
+      contents: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AUTH_LAMBDA_ARTIFACT_PREFIX: ${{ vars.AUTH_LAMBDA_ARTIFACT_PREFIX || vars.LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-auth-lambda' }}
+      GH_TOKEN: ${{ github.token }}
+      LAMBDA_ARCHITECTURE: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_ARTIFACT_BUCKET: ${{ needs.resolve_aws_state.outputs.artifact_bucket }}
+      LAMBDA_ARTIFACT_QUALIFIER: ${{ vars.LAMBDA_ARCHITECTURE || 'x86_64' }}
+      LAMBDA_RELEASE_VERSION: ${{ needs.resolve_aws_state.outputs.current_version }}
+      NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX: ${{ vars.NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX || 'oficina/lab/lambda/oficina-notificacao-lambda' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Restore versioned packages from S3
+        shell: bash
+        env:
+          SELECTED_MODULES: ${{ needs.resolve_aws_state.outputs.selected_modules_csv }}
+        run: |
+          set -euo pipefail
+
+          source ./scripts/lambda-modules.sh
+          mkdir -p .tmp/github-release
+
+          for module in ${SELECTED_MODULES//,/ }; do
+            ./scripts/s3-native-lambda-artifact.sh "${module}" restore
+            load_lambda_module "${module}"
+            asset_name="$(lambda_release_asset_name "${module}" "${LAMBDA_RELEASE_VERSION}" "${LAMBDA_ARCHITECTURE}")"
+            cp "${LAMBDA_BUILD_DIR}/${LAMBDA_NAMED_ARTIFACT_FILENAME}" ".tmp/github-release/${asset_name}"
+          done
+
+          (
+            cd .tmp/github-release
+            sha256sum ./*.zip | sed 's# \./#  #' > SHA256SUMS
+          )
+
+      - name: Create release and publish immutable assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="v${LAMBDA_RELEASE_VERSION}"
+          release_dir=".tmp/github-release"
+          existing_dir=".tmp/github-release-existing"
+          mkdir -p "${existing_dir}"
+
+          if ! gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "Oficina Auth Lambdas ${tag}" \
+              --generate-notes
+          fi
+
+          for asset_path in "${release_dir}"/*.zip "${release_dir}/SHA256SUMS"; do
+            asset_name="$(basename "${asset_path}")"
+            existing_path="${existing_dir}/${asset_name}"
+
+            if gh release download "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset_name}" \
+              --dir "${existing_dir}" >/dev/null 2>&1; then
+              if cmp --silent "${asset_path}" "${existing_path}"; then
+                echo "Asset ${asset_name} ja publicado com conteudo identico."
+                continue
+              fi
+
+              echo "Asset imutavel ${asset_name} ja existe com conteudo diferente na release ${tag}." >&2
+              exit 1
+            fi
+
+            gh release upload "${tag}" "${asset_path}" --repo "${GITHUB_REPOSITORY}"
+          done
+
   report_noop:
     name: report-noop
     if: >
