@@ -35,6 +35,9 @@ MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
 - restaura o pacote do S3 antes do deploy
 - cria a Lambda quando ela não existe
 - atualiza a Lambda quando a versão registrada nela está ausente ou diferente
+- cria ou reutiliza a GitHub Release `v<project.version>` após o deploy
+- publica os pacotes nativos selecionados como assets com versão e arquitetura no nome, além de `SHA256SUMS`
+- trata assets de release como imutáveis: reutiliza conteúdo idêntico e falha se o mesmo nome já possuir conteúdo diferente
 - falha antes do build quando a AWS exige novo artefato e o push em `main` não incrementou `project.version`
 
 `workflow_dispatch`:
@@ -67,6 +70,20 @@ Defaults:
 - `NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-notificacao-lambda`
 
 O deploy grava `OFICINA_LAMBDA_ARTIFACT_VERSION` nas variáveis da Lambda. Esse valor permite que a action pule deploys repetidos quando a função já aponta para a versão do `pom.xml`.
+
+## Assets no GitHub
+
+O S3 permanece como fonte operacional dos pacotes usados no deploy. Depois que os jobs de build e deploy terminam com sucesso ou são dispensados por já estarem alinhados, o workflow restaura do S3 os módulos selecionados e publica uma cópia auditável na release `v<project.version>`:
+
+```text
+oficina-auth-lambda-<version>-<arch>.zip
+oficina-notificacao-lambda-<version>-<arch>.zip
+SHA256SUMS
+```
+
+Em `push` para `main`, os dois módulos são selecionados e a release é publicada de forma atômica com ambos os ZIPs e o arquivo de checksums. Uma execução manual com apenas um `lambda_target` continua podendo fazer build e deploy do módulo, mas não cria uma release parcial. O workflow não usa `--clobber`: se um asset já existir, compara o conteúdo e só aceita a repetição quando os bytes forem idênticos.
+
+Os assets do GitHub são destinados a distribuição, auditoria e recuperação manual. A Lambda continua usando pacote ZIP armazenado no S3; não há migração para container nem dependência operacional do GitHub Releases.
 
 ## Variáveis e secrets principais
 
