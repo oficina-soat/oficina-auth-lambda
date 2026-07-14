@@ -2043,6 +2043,30 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
       OFICINA_AUTH_SCOPE: $oficina_auth_scope,
       OFICINA_AUTH_KEY_ID: $oficina_auth_key_id
     }' > "${desired_env_file}"
+elif [[ "${LAMBDA_USES_DATABASE}" == "true" ]]; then
+  jq -n \
+    --arg disable_signal_handlers "true" \
+    --arg lambda_artifact_version "${LAMBDA_ARTIFACT_VERSION}" \
+    --arg managed_extra_env_keys "${extra_env_keys_csv}" \
+    --arg secrets_manager_config_enabled "${lambda_secrets_manager_config_enabled}" \
+    --arg datasource_username "${lambda_datasource_username}" \
+    --arg datasource_password "${lambda_datasource_password}" \
+    --arg datasource_jdbc_url "${QUARKUS_DATASOURCE_JDBC_URL}" \
+    --arg auth_db_secret_name "${lambda_auth_db_secret_name}" \
+    --arg auth_db_username_secret_name "${lambda_auth_db_username_secret_name}" \
+    --arg auth_db_password_secret_name "${lambda_auth_db_password_secret_name}" \
+    '{
+      DISABLE_SIGNAL_HANDLERS: $disable_signal_handlers,
+      OFICINA_LAMBDA_ARTIFACT_VERSION: $lambda_artifact_version,
+      OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS: $managed_extra_env_keys,
+      SECRETS_MANAGER_CONFIG_ENABLED: $secrets_manager_config_enabled,
+      QUARKUS_DATASOURCE_USERNAME: $datasource_username,
+      QUARKUS_DATASOURCE_PASSWORD: $datasource_password,
+      QUARKUS_DATASOURCE_JDBC_URL: $datasource_jdbc_url,
+      AUTH_DB_SECRET_NAME: $auth_db_secret_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_: $auth_db_username_secret_name,
+      QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_: $auth_db_password_secret_name
+    }' > "${desired_env_file}"
 else
   jq -n \
     --arg disable_signal_handlers "true" \
@@ -2088,6 +2112,19 @@ if [[ "${LAMBDA_USES_JWT}" == "true" ]]; then
     "OFICINA_AUTH_AUDIENCE",
     "OFICINA_AUTH_SCOPE",
     "OFICINA_AUTH_KEY_ID"
+  ]'
+elif [[ "${LAMBDA_USES_DATABASE}" == "true" ]]; then
+  builtin_managed_keys='[
+    "DISABLE_SIGNAL_HANDLERS",
+    "OFICINA_LAMBDA_ARTIFACT_VERSION",
+    "OFICINA_LAMBDA_MANAGED_EXTRA_ENV_KEYS",
+    "SECRETS_MANAGER_CONFIG_ENABLED",
+    "QUARKUS_DATASOURCE_USERNAME",
+    "QUARKUS_DATASOURCE_PASSWORD",
+    "QUARKUS_DATASOURCE_JDBC_URL",
+    "AUTH_DB_SECRET_NAME",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_",
+    "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_"
   ]'
 else
   builtin_managed_keys='[
