@@ -16,6 +16,7 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.UUID;
+import org.jboss.resteasy.reactive.RestResponse;
 
 @Path("/auth")
 @Consumes(MediaType.APPLICATION_JSON)
@@ -43,9 +44,9 @@ public class UsuarioResource {
     @POST
     @Path("/usuarios/{usuarioId}/ativacao")
     @RolesAllowed("administrativo")
-    public Response solicitarAtivacao(@PathParam("usuarioId") UUID usuarioId) {
+    public RestResponse<AtivacaoTokenResponse> solicitarAtivacao(@PathParam("usuarioId") UUID usuarioId) {
         AtivacaoTokenResponse response = ativacaoCredencialService.solicitar(usuarioId);
-        return Response.status(Response.Status.CREATED).entity(response).build();
+        return RestResponse.status(Response.Status.CREATED, response);
     }
 
     @POST
