@@ -27,9 +27,12 @@ restauração.
 ## Rollback
 
 Interrompa eventos de sincronização durante a troca. Se a homologação falhar,
-republique a versão anterior das Lambdas com `DB_NAME=app`,
-`AUTH_DB_USER=oficina_auth_lambda` e
-`AUTH_DB_SECRET_NAME=oficina/lab/database/auth-lambda`. Como a origem é
-preservada, o rollback não depende de restore. Antes de retomar a sincronização,
-confirme que não houve escrita aceita exclusivamente no banco novo; se houve,
-reconcilie os registros por identificador canônico.
+republique a revisão anterior das Lambdas com `DB_NAME=app` e
+`AUTH_DB_USER=oficina_auth_lambda`, usando os secrets legados separados sob
+`oficina/lab/database/auth-lambda/`. Não informe esse prefixo em
+`AUTH_DB_SECRET_NAME` para a revisão atual: ela espera um secret JSON único. Use
+o script e a configuração da própria revisão anterior, cujos artefatos
+imutáveis devem ser preservados para rollback. Como a origem é preservada, o
+rollback não depende de restore. Antes de retomar a sincronização, confirme que
+não houve escrita aceita exclusivamente no banco novo; se houve, reconcilie os
+registros por identificador canônico.
