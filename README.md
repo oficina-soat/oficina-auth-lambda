@@ -19,20 +19,9 @@ Lambdas HTTP da suíte Oficina para autenticação, emissão de JWT, publicaçã
 
 ## Deploy e teste da suíte
 
-O deploy integrado não deve começar por este repositório. Depois de promover as mudanças necessárias para `main`, execute o deploy pelo repositório `../oficina-infra-k8s`:
+O `oficina-infra` provisiona ou retoma os recursos compartilhados do `lab`. Depois que a infraestrutura estiver disponível, cada repositório publica seu próprio runtime a partir de `main`; neste repositório, o caminho canônico é o workflow `deploy-lambda-lab.yml`, que entrega as três Lambdas.
 
-```text
-oficina-infra-k8s -> Actions -> Deploy Lab -> Run workflow
-```
-
-O `Deploy Lab` do `oficina-infra-k8s` aplica a infraestrutura e dispara o deploy do `oficina-infra-db`; o deploy do banco executa RDS, migrations e seed e, ao final, dispara automaticamente o workflow `deploy-lambda-lab.yml` deste repositório e o `deploy-app-lab.yml` do `oficina-app`. Use o workflow deste repositório diretamente apenas para operação pontual das Lambdas, não como caminho principal da suíte.
-
-Depois que todos os workflows terminarem, o teste principal deve ser executado no repositório `../oficina-app`:
-
-```bash
-cd ../oficina-app
-MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
-```
+As validações integradas e as evidências do laboratório ficam centralizadas no `oficina-platform`, com os scripts operacionais de infraestrutura em `oficina-infra`. Repositórios legados não fazem parte do fluxo atual.
 
 Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de autenticação e notificação, publicadas em runtime nativo do Quarkus e expostas pelo mesmo HTTP API Gateway do laboratório.
 
@@ -47,7 +36,10 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
   - envio de e-mail
   - endpoint `POST /notificacoes/email`
   - sem acoplamento direto com banco/JWT
-- não há módulo Java compartilhado nesta Fase 1
+- `auth-sync-lambda`
+  - sincronização assíncrona de usuários operacionais a partir dos eventos do `oficina-os-service`
+  - consumo idempotente por SQS
+- não há módulo Java compartilhado entre as três Lambdas
   - o reuso ficou concentrado no `pom.xml` pai, scripts e workflows
 
 ```mermaid

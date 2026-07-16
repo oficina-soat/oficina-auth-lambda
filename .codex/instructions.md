@@ -6,7 +6,7 @@ Este projeto implementa a Lambda de autenticação da Oficina com Java 25, Quark
 
 - Use sempre `./mvnw`, nunca `mvn`, salvo se houver motivo explícito.
 - Preserve a organização existente em `domain`, `persistence`, `resource` e `config`.
-- Quando precisar definir nomes compartilhados de environments, secrets, variáveis ou recursos, consulte antes `../oficina-app`, `../oficina-infra-k8s` e `../oficina-infra-db`.
+- Quando precisar definir nomes compartilhados de environments, secrets, variáveis ou recursos, consulte antes `../oficina-platform`, `../oficina-infra` e o serviço produtor ou consumidor afetado.
 - Não assuma que Docker, Podman, credenciais AWS ou acesso à infraestrutura remota estão disponíveis.
 - Prefira comandos reais de validação em vez de inferências.
 - Quando alterar código Java, execute ao menos `./mvnw test`.
