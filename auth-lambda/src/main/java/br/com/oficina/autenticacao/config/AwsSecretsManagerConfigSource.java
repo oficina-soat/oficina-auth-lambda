@@ -33,6 +33,8 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
     private static final String JWT_SIGN_KEY_PROPERTY = "smallrye.jwt.sign.key";
     private static final String DEFAULT_JWT_PRIVATE_KEY_FIELD = "privateKeyPem";
     private static final String DEFAULT_JWT_PUBLIC_KEY_FIELD = "publicKeyPem";
+    private static final String DEFAULT_DATASOURCE_USERNAME_FIELD = "username";
+    private static final String DEFAULT_DATASOURCE_PASSWORD_FIELD = "password";
     private static final int ORDINAL = 275;
 
     private final Map<String, String> environment;
@@ -115,7 +117,7 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
         if (secretValue == null) {
             throw new IllegalStateException("Secret " + secretName + " nao contem SecretString legivel.");
         }
-        secretValue = resolveJwtPemFromJson(propertyName, secretValue);
+        secretValue = resolveValueFromJson(propertyName, secretValue);
         properties.put(propertyName, secretValue);
     }
 
@@ -140,8 +142,10 @@ public final class AwsSecretsManagerConfigSource implements ConfigSource {
         return trimmed(value) != null;
     }
 
-    private String resolveJwtPemFromJson(String propertyName, String secretValue) {
+    private String resolveValueFromJson(String propertyName, String secretValue) {
         String fieldName = switch (propertyName) {
+            case DATASOURCE_USERNAME_PROPERTY -> DEFAULT_DATASOURCE_USERNAME_FIELD;
+            case DATASOURCE_PASSWORD_PROPERTY -> DEFAULT_DATASOURCE_PASSWORD_FIELD;
             case JWT_SIGN_KEY_PROPERTY -> configuredField(JWT_PRIVATE_KEY_FIELD_ENV, DEFAULT_JWT_PRIVATE_KEY_FIELD);
             case JWT_VERIFY_PUBLIC_KEY_PROPERTY -> configuredField(JWT_PUBLIC_KEY_FIELD_ENV, DEFAULT_JWT_PUBLIC_KEY_FIELD);
             default -> null;

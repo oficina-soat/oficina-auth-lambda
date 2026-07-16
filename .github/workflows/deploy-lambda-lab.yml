@@ -421,7 +421,7 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'eks-lab' }}
       DB_INSTANCE_IDENTIFIER: ${{ vars.DB_INSTANCE_IDENTIFIER || vars.DB_IDENTIFIER || 'oficina-postgres-lab' }}
-      DB_NAME: ${{ vars.DB_NAME || 'app' }}
+      DB_NAME: ${{ vars.AUTH_DB_NAME || 'oficina_auth' }}
       DB_SSLMODE: ${{ vars.DB_SSLMODE || 'require' }}
       DB_SECURITY_GROUP_IDS: ${{ vars.DB_SECURITY_GROUP_IDS }}
       MASTER_SECRET_ARN: ${{ vars.MASTER_SECRET_ARN }}
@@ -436,11 +436,11 @@ jobs:
       AUTH_DB_BOOTSTRAP_IMAGE: ${{ vars.AUTH_DB_BOOTSTRAP_IMAGE || 'postgres:16' }}
       AUTH_DB_BOOTSTRAP_TIMEOUT: ${{ vars.AUTH_DB_BOOTSTRAP_TIMEOUT || '300s' }}
       SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE: ${{ vars.SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE || 'false' }}
-      AUTH_DB_USER: ${{ vars.AUTH_DB_USER || 'oficina_auth_lambda' }}
+      AUTH_DB_USER: ${{ vars.AUTH_DB_USER || 'oficina_auth_user' }}
       AUTH_DB_PASSWORD: ${{ secrets.AUTH_DB_PASSWORD }}
       AUTH_DB_ALLOW_SCHEMA_CHANGES: ${{ vars.AUTH_DB_ALLOW_SCHEMA_CHANGES || 'false' }}
       STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER: ${{ vars.STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER || 'true' }}
-      AUTH_DB_SECRET_NAME: ${{ vars.AUTH_DB_SECRET_NAME || 'oficina/lab/database/auth-lambda' }}
+      AUTH_DB_SECRET_NAME: ${{ vars.AUTH_DB_SECRET_NAME || 'oficina/lab/database/oficina-auth-lambda' }}
       AUTH_DB_SECRET_KMS_KEY_ID: ${{ vars.AUTH_DB_SECRET_KMS_KEY_ID }}
       ROTATE_AUTH_DB_PASSWORD: ${{ vars.ROTATE_AUTH_DB_PASSWORD || 'false' }}
       AUTO_ALLOW_DEPLOY_RUNNER_CIDR: ${{ vars.AUTO_ALLOW_DEPLOY_RUNNER_CIDR || 'true' }}

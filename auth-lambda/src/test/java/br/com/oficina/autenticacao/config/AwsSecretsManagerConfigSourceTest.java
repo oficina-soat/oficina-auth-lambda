@@ -54,6 +54,28 @@ class AwsSecretsManagerConfigSourceTest {
     }
 
     @Test
+    void shouldResolveDatasourceFieldsFromSharedJsonSecret() {
+        AwsSecretsManagerConfigSource configSource = new AwsSecretsManagerConfigSource(
+                Map.of(
+                        "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_USERNAME_", "database/auth",
+                        "QUARKUS_SECRETSMANAGER_CONFIG_SECRETS__QUARKUS_DATASOURCE_PASSWORD_", "database/auth"),
+                secretName -> {
+                    assertEquals("database/auth", secretName);
+                    return """
+                            {
+                              "engine": "postgres",
+                              "dbname": "oficina_auth",
+                              "username": "oficina_auth_user",
+                              "password": "super-secret"
+                            }
+                            """;
+                });
+
+        assertEquals("oficina_auth_user", configSource.getValue("quarkus.datasource.username"));
+        assertEquals("super-secret", configSource.getValue("quarkus.datasource.password"));
+    }
+
+    @Test
     void shouldNotOverrideDirectEnvironmentValues() {
         AwsSecretsManagerConfigSource configSource = new AwsSecretsManagerConfigSource(
                 Map.of(

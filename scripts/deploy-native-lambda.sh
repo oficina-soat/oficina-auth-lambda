@@ -58,7 +58,7 @@ SHARED_INFRA_NAME="${SHARED_INFRA_NAME:-${EKS_CLUSTER_NAME:-eks-lab}}"
 TF_STATE_REGION="${TF_STATE_REGION:-${AWS_REGION}}"
 LAMBDA_ARTIFACT_BUCKET="${LAMBDA_ARTIFACT_BUCKET:-${TF_STATE_BUCKET:-}}"
 DB_INSTANCE_IDENTIFIER="${DB_INSTANCE_IDENTIFIER:-oficina-postgres-lab}"
-DB_NAME_DEFAULT="${DB_NAME_DEFAULT:-app}"
+DB_NAME_DEFAULT="${DB_NAME_DEFAULT:-oficina_auth}"
 DB_NAME_OVERRIDE="${DB_NAME:-${QUARKUS_DATASOURCE_DB_NAME:-}}"
 DB_SSLMODE="${DB_SSLMODE:-require}"
 DB_SECURITY_GROUP_IDS="${DB_SECURITY_GROUP_IDS:-}"
@@ -74,12 +74,12 @@ AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME="${AUTH_DB_BOOTSTRAP_CONFIGMAP_NAME:-oficina-au
 AUTH_DB_BOOTSTRAP_IMAGE="${AUTH_DB_BOOTSTRAP_IMAGE:-postgres:16}"
 AUTH_DB_BOOTSTRAP_TIMEOUT="${AUTH_DB_BOOTSTRAP_TIMEOUT:-300s}"
 SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE="${SKIP_AUTH_DB_BOOTSTRAP_KUBECONFIG_UPDATE:-false}"
-AUTH_DB_USER="${AUTH_DB_USER:-oficina_auth_lambda}"
+AUTH_DB_USER="${AUTH_DB_USER:-oficina_auth_user}"
 AUTH_DB_PASSWORD="${AUTH_DB_PASSWORD:-}"
 AUTH_DB_ALLOW_SCHEMA_CHANGES="${AUTH_DB_ALLOW_SCHEMA_CHANGES:-false}"
 BOOTSTRAP_AUTH_DB_SCHEMA="${BOOTSTRAP_AUTH_DB_SCHEMA:-true}"
 STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER="${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER:-true}"
-AUTH_DB_SECRET_NAME="${AUTH_DB_SECRET_NAME:-oficina/lab/database/auth-lambda}"
+AUTH_DB_SECRET_NAME="${AUTH_DB_SECRET_NAME:-oficina/lab/database/oficina-auth-lambda}"
 AUTH_DB_SECRET_KMS_KEY_ID="${AUTH_DB_SECRET_KMS_KEY_ID:-}"
 ROTATE_AUTH_DB_PASSWORD="${ROTATE_AUTH_DB_PASSWORD:-false}"
 AUTO_ALLOW_DEPLOY_RUNNER_CIDR="${AUTO_ALLOW_DEPLOY_RUNNER_CIDR:-true}"
@@ -347,12 +347,6 @@ jwt_legacy_private_key_secret_name() {
 
 jwt_legacy_public_key_secret_name() {
   join_secret_path "${JWT_SECRET_NAME}" "${JWT_SECRET_PUBLIC_KEY_FIELD}"
-}
-
-auth_db_secret_field_name() {
-  local field_name="$1"
-
-  join_secret_path "${AUTH_DB_SECRET_NAME}" "${field_name}"
 }
 
 ensure_jwt_inputs() {
@@ -1368,33 +1362,24 @@ bootstrap_auth_db_user() {
   local db_master_username="$2"
   local bootstrap_mode=""
   local master_secret_json=""
+  local existing_auth_secret_json=""
   local existing_auth_secret_user=""
   local existing_auth_secret_password=""
-  local auth_db_username_secret_name=""
-  local auth_db_password_secret_name=""
-  local auth_db_engine_secret_name=""
-  local auth_db_host_secret_name=""
-  local auth_db_port_secret_name=""
-  local auth_db_name_secret_name=""
   local secret_tmp_dir=""
 
   if [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
-    auth_db_username_secret_name="$(auth_db_secret_field_name username)"
-    auth_db_password_secret_name="$(auth_db_secret_field_name password)"
-    auth_db_engine_secret_name="$(auth_db_secret_field_name engine)"
-    auth_db_host_secret_name="$(auth_db_secret_field_name host)"
-    auth_db_port_secret_name="$(auth_db_secret_field_name port)"
-    auth_db_name_secret_name="$(auth_db_secret_field_name dbname)"
+    require_valid_secret_id "${AUTH_DB_SECRET_NAME}" "AUTH_DB_SECRET_NAME"
   fi
 
-  if [[ -n "${auth_db_username_secret_name}" && -n "${auth_db_password_secret_name}" && "${ROTATE_AUTH_DB_PASSWORD}" != "true" ]] \
-    && secret_exists "${auth_db_username_secret_name}" && secret_exists "${auth_db_password_secret_name}"; then
-    existing_auth_secret_user="$(read_secret_string "${auth_db_username_secret_name}")"
+  if [[ -n "${AUTH_DB_SECRET_NAME}" && "${ROTATE_AUTH_DB_PASSWORD}" != "true" ]] \
+    && secret_exists "${AUTH_DB_SECRET_NAME}"; then
+    existing_auth_secret_json="$(read_secret_json "${AUTH_DB_SECRET_NAME}")"
+    existing_auth_secret_user="$(read_secret_field "${existing_auth_secret_json}" username)"
     if [[ "${existing_auth_secret_user}" == "${AUTH_DB_USER}" && -z "${AUTH_DB_PASSWORD}" ]]; then
-      existing_auth_secret_password="$(read_secret_string "${auth_db_password_secret_name}")"
+      existing_auth_secret_password="$(read_secret_field "${existing_auth_secret_json}" password)"
       if [[ -n "${existing_auth_secret_password}" ]]; then
         AUTH_DB_PASSWORD="${existing_auth_secret_password}"
-        log "Reutilizando senha existente do secret ${auth_db_password_secret_name}"
+        log "Reutilizando senha existente do secret ${AUTH_DB_SECRET_NAME}"
       fi
     fi
   fi
@@ -1443,47 +1428,38 @@ bootstrap_auth_db_user() {
 
   if [[ "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
     secret_tmp_dir="$(mktemp -d)"
-    printf '%s' "postgres" > "${secret_tmp_dir}/engine"
-    printf '%s' "${db_host}" > "${secret_tmp_dir}/host"
-    printf '%s' "${db_port}" > "${secret_tmp_dir}/port"
-    printf '%s' "${db_name}" > "${secret_tmp_dir}/dbname"
-    printf '%s' "${AUTH_DB_USER}" > "${secret_tmp_dir}/username"
-    printf '%s' "${AUTH_DB_PASSWORD}" > "${secret_tmp_dir}/password"
+    jq -n \
+      --arg engine postgres \
+      --arg host "${db_host}" \
+      --arg port "${db_port}" \
+      --arg dbname "${db_name}" \
+      --arg username "${AUTH_DB_USER}" \
+      --arg password "${AUTH_DB_PASSWORD}" \
+      '{engine: $engine, host: $host, port: $port, dbname: $dbname, username: $username, password: $password}' \
+      > "${secret_tmp_dir}/database.json"
 
-    upsert_secret_string "${auth_db_engine_secret_name}" "${secret_tmp_dir}/engine" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      "Engine da credencial do auth-lambda no ambiente lab"
-    upsert_secret_string "${auth_db_host_secret_name}" "${secret_tmp_dir}/host" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      "Host da credencial do auth-lambda no ambiente lab"
-    upsert_secret_string "${auth_db_port_secret_name}" "${secret_tmp_dir}/port" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      "Porta da credencial do auth-lambda no ambiente lab"
-    upsert_secret_string "${auth_db_name_secret_name}" "${secret_tmp_dir}/dbname" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      "Database da credencial do auth-lambda no ambiente lab"
-    upsert_secret_string "${auth_db_username_secret_name}" "${secret_tmp_dir}/username" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      "Usuario da credencial do auth-lambda no ambiente lab"
-    upsert_secret_string "${auth_db_password_secret_name}" "${secret_tmp_dir}/password" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
-      "Senha da credencial do auth-lambda no ambiente lab"
+    upsert_secret_string "${AUTH_DB_SECRET_NAME}" "${secret_tmp_dir}/database.json" "${AUTH_DB_SECRET_KMS_KEY_ID}" \
+      "Credencial exclusiva do banco de autenticacao no ambiente lab"
     rm -rf "${secret_tmp_dir}"
-    log "Secrets da credencial do auth-lambda criados/atualizados sob ${AUTH_DB_SECRET_NAME}/"
+    log "Secret da credencial de autenticacao criado/atualizado em ${AUTH_DB_SECRET_NAME}"
   fi
 }
 
 load_auth_db_credentials_from_secret() {
-  local auth_db_username_secret_name
-  local auth_db_password_secret_name
+  local auth_db_secret_json=""
 
   if [[ -z "${AUTH_DB_SECRET_NAME}" || "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" != "true" ]]; then
     return
   fi
 
-  auth_db_username_secret_name="$(auth_db_secret_field_name username)"
-  auth_db_password_secret_name="$(auth_db_secret_field_name password)"
-
-  if [[ -z "${QUARKUS_DATASOURCE_USERNAME}" ]] && secret_exists "${auth_db_username_secret_name}"; then
-    QUARKUS_DATASOURCE_USERNAME="$(read_secret_string "${auth_db_username_secret_name}")"
-  fi
-
-  if [[ -z "${QUARKUS_DATASOURCE_PASSWORD}" ]] && secret_exists "${auth_db_password_secret_name}"; then
-    QUARKUS_DATASOURCE_PASSWORD="$(read_secret_string "${auth_db_password_secret_name}")"
+  if secret_exists "${AUTH_DB_SECRET_NAME}"; then
+    auth_db_secret_json="$(read_secret_json "${AUTH_DB_SECRET_NAME}")"
+    if [[ -z "${QUARKUS_DATASOURCE_USERNAME}" ]]; then
+      QUARKUS_DATASOURCE_USERNAME="$(read_secret_field "${auth_db_secret_json}" username)"
+    fi
+    if [[ -z "${QUARKUS_DATASOURCE_PASSWORD}" ]]; then
+      QUARKUS_DATASOURCE_PASSWORD="$(read_secret_field "${auth_db_secret_json}" password)"
+    fi
   fi
 }
 
@@ -1962,15 +1938,13 @@ lambda_secrets_manager_config_enabled="false"
 
 if [[ "${LAMBDA_USES_DATABASE}" == "true" && "${LAMBDA_SECRET_INJECTION_MODE}" == "runtime-secrets-manager" ]] \
   && [[ -n "${AUTH_DB_SECRET_NAME}" && "${STORE_AUTH_DB_SECRET_IN_SECRETS_MANAGER}" == "true" ]]; then
-  candidate_auth_db_username_secret_name="$(auth_db_secret_field_name username)"
-  candidate_auth_db_password_secret_name="$(auth_db_secret_field_name password)"
   if [[ "${BOOTSTRAP_AUTH_DB_USER}" == "true" ]] \
-    || { secret_exists "${candidate_auth_db_username_secret_name}" && secret_exists "${candidate_auth_db_password_secret_name}"; }; then
+    || secret_exists "${AUTH_DB_SECRET_NAME}"; then
     lambda_datasource_username=""
     lambda_datasource_password=""
     lambda_auth_db_secret_name="${AUTH_DB_SECRET_NAME}"
-    lambda_auth_db_username_secret_name="${candidate_auth_db_username_secret_name}"
-    lambda_auth_db_password_secret_name="${candidate_auth_db_password_secret_name}"
+    lambda_auth_db_username_secret_name="${AUTH_DB_SECRET_NAME}"
+    lambda_auth_db_password_secret_name="${AUTH_DB_SECRET_NAME}"
     lambda_secrets_manager_config_enabled="true"
   fi
 fi
