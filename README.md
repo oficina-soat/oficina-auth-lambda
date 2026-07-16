@@ -90,7 +90,7 @@ flowchart LR
   class Telemetry observe;
 ```
 
-O cadastro operacional pertence ao `oficina-os-service`; a `auth-sync-lambda` mantém somente a projeção necessária para login e autorização. O isolamento futuro do database de autenticação não é antecipado neste diagrama.
+O cadastro operacional pertence ao `oficina-os-service`; a `auth-sync-lambda` mantém somente a projeção necessária para login e autorização. As duas Lambdas de autenticação compartilham exclusivamente o database `oficina_auth`, a role `oficina_auth_user` e o secret JSON `oficina/lab/database/oficina-auth-lambda`.
 
 ## Estrutura do repositório
 
@@ -286,6 +286,8 @@ No workflow de `lab`, `*_LAMBDA_ROLE_NAME` usa `LabRole` como default. Se `*_LAM
 O JSON extra é mesclado nas env vars da Lambda e o script mantém uma lista de chaves gerenciadas para remover configs antigas em deploys seguintes.
 
 O deploy da `auth-lambda` usa `AUTH_DB_BOOTSTRAP_MODE=k8s` no workflow de `lab`, criando um Job temporário com `postgres:16` dentro do EKS para executar o `psql` contra o RDS privado. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas em execução manual a partir de uma rede com rota direta para o endpoint do RDS. O modo `auto` usa `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos. Por padrão, `BOOTSTRAP_AUTH_DB_SCHEMA=true` cria as tabelas `pessoa`, `papel`, `usuario` e `usuario_papel`, além do seed mínimo de usuários do laboratório.
+
+A migração do database legado e o rollback seguro estão descritos em [Migração para o banco exclusivo de autenticação](docs/auth-database-migration.md).
 
 Se `NOTIFICACAO_LAMBDA_EXTRA_ENV_JSON` não for informado, o deploy da `notificacao-lambda` em `lab` assume este fallback seguro:
 
