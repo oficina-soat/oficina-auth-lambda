@@ -52,26 +52,45 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
 
 ```mermaid
 flowchart LR
-  user[Cliente HTTP] --> apigw[API Gateway HTTP API]
+  User["Cliente HTTP"] --> APIGW["API Gateway HTTP API"]
 
-  subgraph repo[oficina-auth-lambda]
-    auth[auth-lambda<br/>POST /auth/token<br/>OIDC/JWKS]
-    notif[notificacao-lambda<br/>POST /notificacoes/email]
+  subgraph Repository["oficina-auth-lambda"]
+    Auth["auth-lambda<br/>login, emissão de JWT,<br/>issuer, OIDC e JWKS"]
+    Sync["auth-sync-lambda<br/>projeção assíncrona<br/>de usuários e papéis"]
+    Notification["notificacao-lambda<br/>envio de e-mail"]
   end
 
-  subgraph aws[AWS lab]
-    apigw --> auth
-    apigw --> notif
-    auth --> secrets[AWS Secrets Manager<br/>oficina/lab/jwt<br/>credencial auth-db]
-    auth --> db[(PostgreSQL RDS<br/>schema auth)]
-    notif --> mailer[Mailer mock padrão<br/>SMTP configurável]
-    auth --> logs[CloudWatch Logs/Metrics]
-    notif --> logs
-  end
+  APIGW --> Auth
+  APIGW --> Notification
+  User -->|"consulta issuer e JWKS"| APIGW
+  OS["oficina-os-service<br/>cadastro operacional"] -->|"eventos de usuário via Outbox"| SNS["SNS"]
+  SNS --> SQS["SQS da auth-sync-lambda"]
+  SQS --> Sync
 
-  app[oficina-app] -->|valida JWT por JWKS| apigw
-  app -->|envia e-mail| apigw
+  Auth --> Secrets["Secrets Manager<br/>chaves JWT e credencial do banco"]
+  Sync --> Secrets
+  Auth --> AuthDB[("PostgreSQL da autenticação<br/>configuração atual do lab")]
+  Sync --> AuthDB
+  Notification --> Mailer["Quarkus Mailer<br/>SMTP configurável"]
+
+  Services["Microsserviços protegidos"] -->|"validam JWT por issuer e JWKS"| APIGW
+  Auth -. "logs, métricas e traces" .-> Telemetry["CloudWatch / OTLP"]
+  Sync -. "logs e métricas" .-> Telemetry
+  Notification -. "logs e métricas" .-> Telemetry
+
+  classDef http fill:#e7f1fa,stroke:#1f5f99,color:#14202b;
+  classDef lambda fill:#e5f5ec,stroke:#176b45,color:#14202b;
+  classDef data fill:#fff3d6,stroke:#7a4b00,color:#14202b;
+  classDef async fill:#f3e8ff,stroke:#6b21a8,color:#14202b;
+  classDef observe fill:#fdeaea,stroke:#a22929,color:#14202b;
+  class APIGW,User,Services http;
+  class Auth,Sync,Notification lambda;
+  class Secrets,AuthDB,Mailer data;
+  class SNS,SQS,OS async;
+  class Telemetry observe;
 ```
+
+O cadastro operacional pertence ao `oficina-os-service`; a `auth-sync-lambda` mantém somente a projeção necessária para login e autorização. O isolamento futuro do database de autenticação não é antecipado neste diagrama.
 
 ## Estrutura do repositório
 
