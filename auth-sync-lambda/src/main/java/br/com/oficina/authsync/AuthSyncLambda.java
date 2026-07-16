@@ -53,6 +53,10 @@ public class AuthSyncLambda implements RequestHandler<SQSEvent, SQSBatchResponse
                     parseOccurredAt(envelope.path("occurredAt")),
                     envelope.path("producer").asText(),
                     envelope.path("aggregateId").asText(),
+                    envelope.path("correlationId").isMissingNode()
+                            || envelope.path("correlationId").isNull()
+                            ? null
+                            : envelope.path("correlationId").asText(),
                     objectMapper.convertValue(envelope.path("payload"), PAYLOAD_TYPE));
         } catch (Exception exception) {
             throw new IllegalArgumentException("Mensagem SQS invalida.", exception);

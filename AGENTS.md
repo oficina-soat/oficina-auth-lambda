@@ -16,9 +16,9 @@ O código principal está concentrado em `src/main/java/br/com/oficina/autentica
 
 Este repositório faz parte de uma suíte maior. Assuma que, quando presentes na mesma raiz deste diretório, os repositórios irmãos relevantes são:
 
-- `../oficina-app`
-- `../oficina-infra-k8s`
-- `../oficina-infra-db`
+- `../oficina-platform`
+- `../oficina-infra`
+- `../oficina-os-service`
 
 Quando esses repositórios estiverem disponíveis, eles devem ser consultados para manter consistência de nomes e contratos compartilhados da suíte, especialmente:
 
@@ -35,7 +35,7 @@ Quando esses repositórios estiverem disponíveis, eles devem ser consultados pa
 - Ao adicionar ou ajustar integração de infraestrutura, dê preferência a extensões oficiais do Quarkus ou do ecossistema Quarkiverse antes de recorrer a SDKs, código customizado ou scripts adicionais.
 - Evite introduzir dependências novas sem necessidade clara.
 - Mantenha compatibilidade com o fluxo atual de build nativo e deploy da Lambda.
-- Quando houver dúvida sobre nomes que precisam ser iguais entre serviços e infra, consulte primeiro `../oficina-app`, `../oficina-infra-k8s` e `../oficina-infra-db` antes de definir novos valores.
+- Quando houver dúvida sobre nomes que precisam ser iguais entre serviços e infra, consulte primeiro `../oficina-platform`, `../oficina-infra` e o serviço produtor ou consumidor afetado antes de definir novos valores.
 
 ## Implementação
 

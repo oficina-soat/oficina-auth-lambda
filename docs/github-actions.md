@@ -5,14 +5,7 @@ O repositório mantém dois workflows sem declarar GitHub Environment, para evit
 - `.github/workflows/open-pr-to-main.yml` (`Open PR To Main`)
 - `.github/workflows/deploy-lambda-lab.yml` (`Deploy Lambda Lab`)
 
-No fluxo principal da suíte, `Deploy Lambda Lab` é disparado pelo encadeamento `oficina-infra-k8s -> oficina-infra-db -> oficina-auth-lambda`. A execução manual fica reservada para operação pontual das Lambdas em `main`.
-
-Depois que a suíte estiver implantada, a validação fim-a-fim principal deve ser rodada no `oficina-app`:
-
-```bash
-cd ../oficina-app
-MODO_ACESSO=aws ./scripts/validar-metricas-paineis.sh
-```
+O `oficina-infra` provisiona ou retoma a infraestrutura compartilhada. O workflow `Deploy Lambda Lab` deste repositório é o caminho canônico para publicar as três Lambdas a partir de `main`; as evidências integradas são registradas no `oficina-platform`.
 
 ## Fluxo
 
@@ -81,7 +74,7 @@ oficina-notificacao-lambda-<version>-<arch>.zip
 SHA256SUMS
 ```
 
-Em `push` para `main`, os dois módulos são selecionados e a release é publicada de forma atômica com ambos os ZIPs e o arquivo de checksums. Uma execução manual com apenas um `lambda_target` continua podendo fazer build e deploy do módulo, mas não cria uma release parcial. O workflow não usa `--clobber`: se um asset já existir, compara o conteúdo e só aceita a repetição quando os bytes forem idênticos.
+Em `push` para `main`, os três módulos são selecionados e a release é publicada de forma atômica com os três ZIPs e o arquivo de checksums. Uma execução manual com apenas um `lambda_target` continua podendo fazer build e deploy do módulo, mas não cria uma release parcial. O workflow não usa `--clobber`: se um asset já existir, compara o conteúdo e só aceita a repetição quando os bytes forem idênticos.
 
 Os assets do GitHub são destinados a distribuição, auditoria e recuperação manual. A Lambda continua usando pacote ZIP armazenado no S3; não há migração para container nem dependência operacional do GitHub Releases.
 
