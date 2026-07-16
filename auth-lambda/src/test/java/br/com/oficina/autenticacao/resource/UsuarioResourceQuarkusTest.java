@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -108,6 +109,69 @@ class UsuarioResourceQuarkusTest {
                 .contentType(ContentType.JSON)
                 .body("message", equalTo("CPF inválido: 84191404066"))
                 .body("motivo", equalTo("CPF inválido: 84191404066"));
+    }
+
+    @Test
+    void shouldExposeSanitizedCredentialStatusToAdministrator() {
+        var externalId = prepareUserWithoutCredential();
+        var adminToken = given()
+                .contentType(ContentType.JSON)
+                .body(new AutenticarUsuarioRequest(DOCUMENTO_ATIVO, SENHA_CORRETA))
+                .post("/auth/token")
+                .then()
+                .statusCode(200)
+                .extract()
+                .path("access_token")
+                .toString();
+
+        given()
+                .auth().oauth2(adminToken)
+                .get("/auth/usuarios/{usuarioId}/credencial", externalId)
+                .then()
+                .statusCode(200)
+                .body("status", equalTo("NAO_ATIVADA"))
+                .body("acoesPermitidas[0]", equalTo("SOLICITAR_ATIVACAO"))
+                .body("$", org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("password")))
+                .body("$", org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasKey("token")));
+
+        given()
+                .auth().oauth2(adminToken)
+                .contentType(ContentType.JSON)
+                .body("{}")
+                .post("/auth/usuarios/{usuarioId}/ativacao", externalId)
+                .then()
+                .statusCode(201);
+
+        given()
+                .auth().oauth2(adminToken)
+                .get("/auth/usuarios/{usuarioId}/credencial", externalId)
+                .then()
+                .statusCode(200)
+                .body("status", equalTo("ATIVACAO_PENDENTE"))
+                .body("expiresAt", org.hamcrest.Matchers.notNullValue());
+    }
+
+    private static UUID prepareUserWithoutCredential() {
+        var externalId = UUID.fromString("30000000-0000-4000-8000-000000000099");
+        QuarkusTransaction.requiringNew().run(() -> {
+            var existing = UsuarioEntity.findByExternalId(externalId);
+            if (existing != null) {
+                existing.password = null;
+                br.com.oficina.autenticacao.persistence.AtivacaoTokenEntity.delete("usuario", existing);
+                return;
+            }
+            var pessoa = new PessoaEntity();
+            pessoa.documento = "16899535009";
+            pessoa.tipoPessoa = TipoPessoa.FISICA;
+            pessoa.persist();
+            var usuario = new UsuarioEntity();
+            usuario.externalId = externalId;
+            usuario.pessoa = pessoa;
+            usuario.status = UsuarioStatus.ATIVO;
+            usuario.papelEntities.add(PapelEntity.<PapelEntity>find("nome", "mecanico").firstResult());
+            usuario.persist();
+        });
+        return externalId;
     }
 
     private static void persistUsuarioIfMissing(String documento, String password, String... papeis) {

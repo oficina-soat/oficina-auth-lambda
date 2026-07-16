@@ -30,7 +30,7 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
 - `auth-lambda`
   - autenticação por CPF e senha
   - emissão de JWT
-  - endpoints `POST /auth`, `POST /auth/token`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
+  - endpoints de autenticação, ativação administrativa e consulta sanitizada do estado da credencial
   - integração com PostgreSQL/RDS e AWS Secrets Manager
 - `notificacao-lambda`
   - envio de e-mail
@@ -101,6 +101,8 @@ Auth:
 ```text
 POST /auth
 POST /auth/token
+GET /auth/usuarios/{usuarioId}/credencial
+POST /auth/usuarios/{usuarioId}/ativacao
 GET /.well-known/openid-configuration
 GET /.well-known/jwks.json
 ```

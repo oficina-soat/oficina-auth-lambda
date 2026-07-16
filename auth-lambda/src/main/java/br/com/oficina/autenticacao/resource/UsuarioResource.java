@@ -4,12 +4,14 @@ import br.com.oficina.autenticacao.domain.AutenticarUsuarioUseCase;
 import br.com.oficina.autenticacao.domain.AtivacaoCredencialService;
 import br.com.oficina.autenticacao.resource.dto.AtivacaoRequest;
 import br.com.oficina.autenticacao.resource.dto.AtivacaoTokenResponse;
+import br.com.oficina.autenticacao.resource.dto.CredencialStatusResponse;
 import jakarta.annotation.security.RolesAllowed;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.PathParam;
@@ -47,6 +49,13 @@ public class UsuarioResource {
     public RestResponse<AtivacaoTokenResponse> solicitarAtivacao(@PathParam("usuarioId") UUID usuarioId) {
         AtivacaoTokenResponse response = ativacaoCredencialService.solicitar(usuarioId);
         return RestResponse.status(Response.Status.CREATED, response);
+    }
+
+    @GET
+    @Path("/usuarios/{usuarioId}/credencial")
+    @RolesAllowed("administrativo")
+    public CredencialStatusResponse consultarCredencial(@PathParam("usuarioId") UUID usuarioId) {
+        return ativacaoCredencialService.consultar(usuarioId);
     }
 
     @POST
