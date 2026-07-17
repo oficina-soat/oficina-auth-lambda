@@ -260,7 +260,10 @@ jobs:
               fi
             fi
 
-            if [[ "${function_exists}" != "true" || "${deployed_version}" != "${current_version}" || "${need_build}" == "true" ]]; then
+            # Um disparo manual tambem funciona como reconciliacao de
+            # configuracao. A versao do artefato pode estar correta enquanto
+            # variaveis, VPC ou integracoes resolvidas pela infra mudaram.
+            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${function_exists}" != "true" || "${deployed_version}" != "${current_version}" || "${need_build}" == "true" ]]; then
               need_deploy="true"
             fi
 
