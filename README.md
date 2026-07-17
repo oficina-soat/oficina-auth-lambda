@@ -30,7 +30,7 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
 - `auth-lambda`
   - autenticação por CPF e senha
   - emissão de JWT
-  - endpoints `POST /auth`, `POST /auth/token`, `GET /.well-known/openid-configuration` e `GET /.well-known/jwks.json`
+  - endpoints de autenticação, ativação administrativa e consulta sanitizada do estado da credencial
   - integração com PostgreSQL/RDS e AWS Secrets Manager
 - `notificacao-lambda`
   - envio de e-mail
@@ -66,19 +66,19 @@ flowchart LR
   Notification --> Mailer["Quarkus Mailer<br/>SMTP configurável"]
 
   Services["Microsserviços protegidos"] -->|"validam JWT por issuer e JWKS"| APIGW
-  Auth -. "logs, métricas e traces" .-> Telemetry["CloudWatch / OTLP"]
-  Sync -. "logs e métricas" .-> Telemetry
-  Notification -. "logs e métricas" .-> Telemetry
+  Auth -. "métricas, traces e logs" .-> Telemetry["Coletor OTLP"]
+  Sync -. "métricas, traces e logs" .-> Telemetry
+  Notification -. "métricas, traces e logs" .-> Telemetry
 
-  classDef http fill:#e7f1fa,stroke:#1f5f99,color:#14202b;
-  classDef lambda fill:#e5f5ec,stroke:#176b45,color:#14202b;
+  classDef core fill:#e5f5ec,stroke:#176b45,color:#14202b;
+  classDef adapter fill:#e7f1fa,stroke:#1f5f99,color:#14202b;
   classDef data fill:#fff3d6,stroke:#7a4b00,color:#14202b;
-  classDef async fill:#f3e8ff,stroke:#6b21a8,color:#14202b;
+  classDef event fill:#f3e8ff,stroke:#6b21a8,color:#14202b;
   classDef observe fill:#fdeaea,stroke:#a22929,color:#14202b;
-  class APIGW,User,Services http;
-  class Auth,Sync,Notification lambda;
+  class Auth,Sync,Notification core;
+  class APIGW,User,Services adapter;
   class Secrets,AuthDB,Mailer data;
-  class SNS,SQS,OS async;
+  class SNS,SQS,OS event;
   class Telemetry observe;
 ```
 
@@ -101,6 +101,8 @@ Auth:
 ```text
 POST /auth
 POST /auth/token
+GET /auth/usuarios/{usuarioId}/credencial
+POST /auth/usuarios/{usuarioId}/ativacao
 GET /.well-known/openid-configuration
 GET /.well-known/jwks.json
 ```

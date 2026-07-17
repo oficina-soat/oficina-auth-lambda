@@ -4,6 +4,7 @@ import br.com.oficina.autenticacao.persistence.AtivacaoTokenEntity;
 import br.com.oficina.autenticacao.persistence.UsuarioEntity;
 import br.com.oficina.autenticacao.resource.dto.AtivacaoRequest;
 import br.com.oficina.autenticacao.resource.dto.AtivacaoTokenResponse;
+import br.com.oficina.autenticacao.resource.dto.CredencialStatusResponse;
 import io.quarkus.elytron.security.common.BcryptUtil;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.transaction.Transactional;
@@ -58,6 +59,30 @@ public class AtivacaoCredencialService {
         entity.expiresAt = now.plus(tokenTtl);
         entity.persist();
         return new AtivacaoTokenResponse(token, entity.expiresAt);
+    }
+
+    @Transactional
+    public CredencialStatusResponse consultar(UUID usuarioId) {
+        var usuario = UsuarioEntity.findByExternalId(usuarioId);
+        if (usuario == null) {
+            throw new NotFoundException("Usuario operacional nao encontrado.");
+        }
+        if (usuario.password != null) {
+            return new CredencialStatusResponse("ATIVA", null, java.util.List.of());
+        }
+        var now = OffsetDateTime.now(ZoneOffset.UTC);
+        var pendente = AtivacaoTokenEntity.<AtivacaoTokenEntity>find(
+                        "usuario = ?1 and usedAt is null and invalidatedAt is null and expiresAt > ?2 order by expiresAt desc",
+                        usuario,
+                        now)
+                .firstResult();
+        if (pendente != null) {
+            return new CredencialStatusResponse("ATIVACAO_PENDENTE", pendente.expiresAt, java.util.List.of("SOLICITAR_ATIVACAO"));
+        }
+        var acoes = usuario.status == UsuarioStatus.ATIVO
+                ? java.util.List.of("SOLICITAR_ATIVACAO")
+                : java.util.List.<String>of();
+        return new CredencialStatusResponse("NAO_ATIVADA", null, acoes);
     }
 
     @Transactional
