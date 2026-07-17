@@ -2,9 +2,11 @@ package br.com.oficina.autenticacao.resource;
 
 import br.com.oficina.autenticacao.domain.AutenticarUsuarioUseCase;
 import br.com.oficina.autenticacao.domain.AtivacaoCredencialService;
+import br.com.oficina.autenticacao.domain.DashboardCredenciaisService;
 import br.com.oficina.autenticacao.resource.dto.AtivacaoRequest;
 import br.com.oficina.autenticacao.resource.dto.AtivacaoTokenResponse;
 import br.com.oficina.autenticacao.resource.dto.CredencialStatusResponse;
+import br.com.oficina.autenticacao.resource.dto.DashboardCredenciaisResponse;
 import jakarta.annotation.security.RolesAllowed;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioRequest;
 import br.com.oficina.autenticacao.resource.dto.AutenticarUsuarioResponse;
@@ -27,6 +29,7 @@ public class UsuarioResource {
 
     @Inject AutenticarUsuarioUseCase autenticarUsuarioUseCase;
     @Inject AtivacaoCredencialService ativacaoCredencialService;
+    @Inject DashboardCredenciaisService dashboardCredenciaisService;
 
     UsuarioResource(AutenticarUsuarioUseCase autenticarUsuarioUseCase) {
         this.autenticarUsuarioUseCase = autenticarUsuarioUseCase;
@@ -56,6 +59,13 @@ public class UsuarioResource {
     @RolesAllowed("administrativo")
     public CredencialStatusResponse consultarCredencial(@PathParam("usuarioId") UUID usuarioId) {
         return ativacaoCredencialService.consultar(usuarioId);
+    }
+
+    @GET
+    @Path("/dashboard/credenciais")
+    @RolesAllowed("administrativo")
+    public DashboardCredenciaisResponse consultarDashboardCredenciais() {
+        return dashboardCredenciaisService.consultar();
     }
 
     @POST

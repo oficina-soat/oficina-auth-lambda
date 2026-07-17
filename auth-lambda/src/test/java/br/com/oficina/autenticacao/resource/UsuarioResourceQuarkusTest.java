@@ -1,6 +1,7 @@
 package br.com.oficina.autenticacao.resource;
 
 import br.com.oficina.autenticacao.domain.UsuarioStatus;
+import br.com.oficina.autenticacao.domain.DashboardCredenciaisService;
 import br.com.oficina.autenticacao.domain.TipoPessoa;
 import br.com.oficina.autenticacao.persistence.PapelEntity;
 import br.com.oficina.autenticacao.persistence.PessoaEntity;
@@ -37,9 +38,25 @@ class UsuarioResourceQuarkusTest {
     @Inject
     JWTParser jwtParser;
 
+    @Inject
+    DashboardCredenciaisService dashboardCredenciaisService;
+
     @BeforeEach
     void setUp() {
         persistUsuarioIfMissing(DOCUMENTO_ATIVO, SENHA_CORRETA, "administrativo", "mecanico", "recepcionista");
+    }
+
+    @Test
+    void shouldAggregateCredentialStatusesWithoutSensitiveData() {
+        prepareUserWithoutCredential();
+        var dashboard = dashboardCredenciaisService.consultar();
+
+        assertEquals(3, dashboard.contagensPorStatus().size());
+        assertEquals(1, dashboard.contagensPorStatus().stream()
+                .filter(item -> item.status().equals("NAO_ATIVADA"))
+                .findFirst()
+                .orElseThrow()
+                .quantidade());
     }
 
     @Test

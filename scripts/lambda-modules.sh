@@ -34,7 +34,7 @@ load_lambda_module() {
       LAMBDA_ARTIFACT_PREFIX_DEFAULT="oficina/lab/lambda/oficina-auth-lambda"
       LAMBDA_EXTRA_ENV_JSON_DEFAULT="{}"
       LAMBDA_API_GATEWAY_ROUTE_KEY_DEFAULT="POST /auth"
-      LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /auth;POST /auth/token;POST /auth/usuarios/{usuarioId}/ativacao;GET /auth/usuarios/{usuarioId}/credencial;POST /auth/ativacoes;GET /.well-known/openid-configuration;GET /.well-known/jwks.json"
+      LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT="POST /auth;POST /auth/token;POST /auth/usuarios/{usuarioId}/ativacao;GET /auth/usuarios/{usuarioId}/credencial;GET /auth/dashboard/credenciais;POST /auth/ativacoes;GET /.well-known/openid-configuration;GET /.well-known/jwks.json"
       LAMBDA_ENV_PREFIX="AUTH"
       LAMBDA_USES_DATABASE="true"
       LAMBDA_USES_JWT="true"
