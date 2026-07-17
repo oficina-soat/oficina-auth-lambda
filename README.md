@@ -102,6 +102,7 @@ Auth:
 POST /auth
 POST /auth/token
 GET /auth/usuarios/{usuarioId}/credencial
+GET /auth/dashboard/credenciais
 POST /auth/usuarios/{usuarioId}/ativacao
 GET /.well-known/openid-configuration
 GET /.well-known/jwks.json
