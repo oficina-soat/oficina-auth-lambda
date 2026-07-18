@@ -75,6 +75,10 @@ else
       auth-sync-lambda/*)
         auth_sync_impacted="true"
         ;;
+      auth-common/*)
+        auth_impacted="true"
+        auth_sync_impacted="true"
+        ;;
       notificacao-lambda/*)
         notificacao_impacted="true"
         ;;

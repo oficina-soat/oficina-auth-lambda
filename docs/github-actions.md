@@ -50,6 +50,13 @@ Auth:
 <AUTH_LAMBDA_ARTIFACT_PREFIX>/<arch>/<version>/oficina-auth-lambda-native.zip
 ```
 
+Sincronização de usuários:
+
+```text
+<AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX>/<arch>/<version>/function.zip
+<AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX>/<arch>/<version>/oficina-auth-sync-lambda-native.zip
+```
+
 Notificação:
 
 ```text
@@ -60,6 +67,7 @@ Notificação:
 Defaults:
 
 - `AUTH_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-auth-lambda`
+- `AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-auth-sync-lambda`
 - `NOTIFICACAO_LAMBDA_ARTIFACT_PREFIX=oficina/lab/lambda/oficina-notificacao-lambda`
 
 O deploy grava `OFICINA_LAMBDA_ARTIFACT_VERSION` nas variáveis da Lambda. Esse valor permite que a action pule deploys repetidos quando a função já aponta para a versão do `pom.xml`.
@@ -70,6 +78,7 @@ O S3 permanece como fonte operacional dos pacotes usados no deploy. Depois que o
 
 ```text
 oficina-auth-lambda-<version>-<arch>.zip
+oficina-auth-sync-lambda-<version>-<arch>.zip
 oficina-notificacao-lambda-<version>-<arch>.zip
 SHA256SUMS
 ```
@@ -132,6 +141,21 @@ Auth:
 Quando `AUTH_DB_NAME` não é informado, o workflow `Deploy Lambda Lab` usa o database exclusivo `oficina_auth`. O script também assume esse nome e bootstrapa a role `oficina_auth_user`. Com `BOOTSTRAP_AUTH_DB_SCHEMA=true`, valor padrão do `lab`, o mesmo bootstrap cria as tabelas `pessoa`, `papel`, `usuario` e `usuario_papel`, além do seed mínimo de usuários do laboratório. A credencial é armazenada como um único JSON em `oficina/lab/database/oficina-auth-lambda`; username e password não são duplicados em secrets filhos.
 
 O workflow usa `AUTH_DB_BOOTSTRAP_MODE=k8s` por padrão porque o RDS do laboratório fica privado na VPC. Nesse modo, o script atualiza o kubeconfig do `EKS_CLUSTER_NAME`, cria um Job Kubernetes efêmero com `AUTH_DB_BOOTSTRAP_IMAGE=postgres:16`, executa o `psql` dentro do cluster e remove os objetos temporários ao final. Use `AUTH_DB_BOOTSTRAP_MODE=local` apenas quando o executor tiver rota direta para o endpoint privado do RDS. O modo `auto` seleciona `k8s` em GitHub Actions quando `EKS_CLUSTER_NAME` está definido e `local` nos demais casos.
+
+Sincronização de usuários:
+
+- `AUTH_SYNC_LAMBDA_FUNCTION_NAME`
+- `AUTH_SYNC_LAMBDA_ROLE_ARN` ou `AUTH_SYNC_LAMBDA_ROLE_NAME`
+- `AUTH_SYNC_LAMBDA_ATTACH_VPC`
+- `AUTH_SYNC_LAMBDA_VPC_ID`
+- `AUTH_SYNC_LAMBDA_SUBNET_IDS`
+- `AUTH_SYNC_LAMBDA_SECURITY_GROUP_NAME`
+- `AUTH_SYNC_LAMBDA_ARTIFACT_PREFIX`
+- `AUTH_SYNC_LAMBDA_SQS_QUEUE_NAMES`
+- `AUTH_SYNC_LAMBDA_SQS_BATCH_SIZE`
+- `AUTH_SYNC_LAMBDA_EXTRA_ENV_JSON`
+
+A `auth-sync-lambda` não recebe rotas no API Gateway. O deploy cria ou atualiza os event source mappings das filas de `usuarioAdicionado`, `usuarioAtualizado` e `usuarioExcluido`, habilitando `ReportBatchItemFailures`. O tamanho do lote deve ficar entre 1 e 10. O deploy dos módulos é serializado para que a `auth-lambda` conclua o bootstrap antes da sincronização.
 
 Notificação:
 

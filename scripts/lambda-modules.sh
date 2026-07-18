@@ -38,6 +38,9 @@ load_lambda_module() {
       LAMBDA_ENV_PREFIX="AUTH"
       LAMBDA_USES_DATABASE="true"
       LAMBDA_USES_JWT="true"
+      LAMBDA_BOOTSTRAPS_DATABASE="true"
+      LAMBDA_USES_SQS="false"
+      LAMBDA_SQS_QUEUE_NAMES_DEFAULT=""
       LAMBDA_ATTACH_VPC_DEFAULT="true"
       LAMBDA_ATTACH_API_GATEWAY_DEFAULT="true"
       ;;
@@ -53,6 +56,9 @@ load_lambda_module() {
       LAMBDA_ENV_PREFIX="AUTH_SYNC"
       LAMBDA_USES_DATABASE="true"
       LAMBDA_USES_JWT="false"
+      LAMBDA_BOOTSTRAPS_DATABASE="false"
+      LAMBDA_USES_SQS="true"
+      LAMBDA_SQS_QUEUE_NAMES_DEFAULT="oficina-os-usuario-adicionado-oficina-auth-sync-lambda;oficina-os-usuario-atualizado-oficina-auth-sync-lambda;oficina-os-usuario-excluido-oficina-auth-sync-lambda"
       LAMBDA_ATTACH_VPC_DEFAULT="true"
       LAMBDA_ATTACH_API_GATEWAY_DEFAULT="false"
       ;;
@@ -68,6 +74,9 @@ load_lambda_module() {
       LAMBDA_ENV_PREFIX="NOTIFICACAO"
       LAMBDA_USES_DATABASE="false"
       LAMBDA_USES_JWT="false"
+      LAMBDA_BOOTSTRAPS_DATABASE="false"
+      LAMBDA_USES_SQS="false"
+      LAMBDA_SQS_QUEUE_NAMES_DEFAULT=""
       LAMBDA_ATTACH_VPC_DEFAULT="true"
       LAMBDA_ATTACH_API_GATEWAY_DEFAULT="true"
       ;;

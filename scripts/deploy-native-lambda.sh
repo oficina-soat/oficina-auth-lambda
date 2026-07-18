@@ -121,7 +121,11 @@ OFICINA_AUTH_ISSUER="${OFICINA_AUTH_ISSUER:-}"
 OFICINA_AUTH_AUDIENCE="${OFICINA_AUTH_AUDIENCE:-oficina-os-service,oficina-billing-service,oficina-execution-service}"
 OFICINA_AUTH_SCOPE="${OFICINA_AUTH_SCOPE:-oficina-app}"
 OFICINA_AUTH_KEY_ID="${OFICINA_AUTH_KEY_ID:-oficina-lab-rsa}"
-ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY ATTACH_API_GATEWAY "${LAMBDA_ATTACH_API_GATEWAY_DEFAULT}")"
+api_gateway_attach_generic_var="ATTACH_API_GATEWAY"
+if [[ "${LAMBDA_USES_SQS}" == "true" ]]; then
+  api_gateway_attach_generic_var=""
+fi
+ATTACH_API_GATEWAY="$(pick_module_var ATTACH_API_GATEWAY "${api_gateway_attach_generic_var}" "${LAMBDA_ATTACH_API_GATEWAY_DEFAULT}")"
 API_GATEWAY_ID="$(pick_module_var API_GATEWAY_ID API_GATEWAY_ID "")"
 API_GATEWAY_NAME="$(pick_module_var API_GATEWAY_NAME API_GATEWAY_NAME "${EKS_CLUSTER_NAME:+${EKS_CLUSTER_NAME}-http-api}")"
 # Mantem compatibilidade com variavel legada de rota unica; o deploy usa API_GATEWAY_ROUTE_KEYS.
@@ -130,6 +134,8 @@ API_GATEWAY_ROUTE_KEY="$(pick_module_var API_GATEWAY_ROUTE_KEY API_GATEWAY_ROUTE
 API_GATEWAY_ROUTE_KEYS="$(pick_module_var API_GATEWAY_ROUTE_KEYS API_GATEWAY_ROUTE_KEYS "${LAMBDA_API_GATEWAY_ROUTE_KEYS_DEFAULT}")"
 API_GATEWAY_PAYLOAD_FORMAT_VERSION="${API_GATEWAY_PAYLOAD_FORMAT_VERSION:-2.0}"
 API_GATEWAY_TIMEOUT_MILLISECONDS="${API_GATEWAY_TIMEOUT_MILLISECONDS:-30000}"
+SQS_QUEUE_NAMES="$(pick_module_var LAMBDA_SQS_QUEUE_NAMES SQS_QUEUE_NAMES "${LAMBDA_SQS_QUEUE_NAMES_DEFAULT}")"
+SQS_BATCH_SIZE="$(pick_module_var LAMBDA_SQS_BATCH_SIZE SQS_BATCH_SIZE 10)"
 NOTIFICACAO_MAILHOG_NLB_NAME="${NOTIFICACAO_MAILHOG_NLB_NAME:-}"
 NOTIFICACAO_MAILER_USES_PRIVATE_MAILHOG="false"
 LAMBDA_CODE_S3_BUCKET=""
@@ -1630,6 +1636,65 @@ ensure_api_gateway_integration() {
   fi
 }
 
+ensure_sqs_event_source_mappings() {
+  if [[ "${LAMBDA_USES_SQS}" != "true" ]]; then
+    return
+  fi
+  if ! [[ "${SQS_BATCH_SIZE}" =~ ^[0-9]+$ ]] || ((SQS_BATCH_SIZE < 1 || SQS_BATCH_SIZE > 10)); then
+    echo "SQS_BATCH_SIZE deve ser um inteiro entre 1 e 10: ${SQS_BATCH_SIZE}" >&2
+    exit 1
+  fi
+
+  local queue_name
+  local queue_url
+  local queue_arn
+  local mapping_uuid
+  IFS=';' read -r -a queue_names <<<"${SQS_QUEUE_NAMES}"
+  for queue_name in "${queue_names[@]}"; do
+    queue_name="$(trim "${queue_name}")"
+    [[ -n "${queue_name}" ]] || continue
+
+    log "Garantindo event source mapping da fila ${queue_name}"
+    queue_url="$(
+      aws --region "${AWS_REGION}" sqs get-queue-url \
+        --queue-name "${queue_name}" \
+        --query 'QueueUrl' \
+        --output text
+    )"
+    require_non_empty "${queue_url}" "queue_url:${queue_name}"
+    queue_arn="$(
+      aws --region "${AWS_REGION}" sqs get-queue-attributes \
+        --queue-url "${queue_url}" \
+        --attribute-names QueueArn \
+        --query 'Attributes.QueueArn' \
+        --output text
+    )"
+    require_non_empty "${queue_arn}" "queue_arn:${queue_name}"
+
+    mapping_uuid="$(
+      aws --region "${AWS_REGION}" lambda list-event-source-mappings \
+        --function-name "${LAMBDA_FUNCTION_NAME}" \
+        --event-source-arn "${queue_arn}" \
+        --query 'EventSourceMappings[0].UUID' \
+        --output text
+    )"
+    if [[ -n "${mapping_uuid}" && "${mapping_uuid}" != "None" ]]; then
+      aws --region "${AWS_REGION}" lambda update-event-source-mapping \
+        --uuid "${mapping_uuid}" \
+        --batch-size "${SQS_BATCH_SIZE}" \
+        --function-response-types ReportBatchItemFailures \
+        --enabled >/dev/null
+    else
+      aws --region "${AWS_REGION}" lambda create-event-source-mapping \
+        --function-name "${LAMBDA_FUNCTION_NAME}" \
+        --event-source-arn "${queue_arn}" \
+        --batch-size "${SQS_BATCH_SIZE}" \
+        --function-response-types ReportBatchItemFailures \
+        --enabled >/dev/null
+    fi
+  done
+}
+
 validate_json_object() {
   local json_value="$1"
   local name="$2"
@@ -1896,7 +1961,13 @@ if [[ "${LAMBDA_ATTACH_VPC}" == "true" ]]; then
       authorize_db_ingress "${db_group_id}" "${lambda_sg_id}" "${db_port}"
     done
 
-    ensure_auth_db_credentials "${db_master_secret_arn}" "${db_master_username}"
+    if [[ "${LAMBDA_BOOTSTRAPS_DATABASE}" == "true" ]]; then
+      ensure_auth_db_credentials "${db_master_secret_arn}" "${db_master_username}"
+    else
+      load_auth_db_credentials_from_secret
+      require_non_empty "${QUARKUS_DATASOURCE_USERNAME}" "QUARKUS_DATASOURCE_USERNAME"
+      require_non_empty "${QUARKUS_DATASOURCE_PASSWORD}" "QUARKUS_DATASOURCE_PASSWORD"
+    fi
   fi
 
   vpc_config="SubnetIds=${LAMBDA_SUBNET_IDS},SecurityGroupIds=${lambda_sg_id}"
@@ -2227,19 +2298,6 @@ aws --region "${AWS_REGION}" lambda wait function-active \
   --function-name "${LAMBDA_FUNCTION_NAME}"
 
 ensure_api_gateway_integration
-
-if [[ "${LAMBDA_MODULE}" == "auth-sync-lambda" ]]; then
-  while IFS= read -r mapping_uuid; do
-    [[ -n "${mapping_uuid}" ]] || continue
-    aws --region "${AWS_REGION}" lambda update-event-source-mapping \
-      --uuid "${mapping_uuid}" \
-      --enabled >/dev/null
-  done < <(
-    aws --region "${AWS_REGION}" lambda list-event-source-mappings \
-      --function-name "${LAMBDA_FUNCTION_NAME}" \
-      --query 'EventSourceMappings[].UUID' \
-      --output text | tr '\t' '\n'
-  )
-fi
+ensure_sqs_event_source_mappings
 
 log "Deploy concluido para ${LAMBDA_FUNCTION_NAME}"
