@@ -2,7 +2,7 @@
 
 ## Propósito
 
-Lambdas HTTP da suíte Oficina para autenticação, emissão de JWT, publicação de metadados OIDC/JWKS e envio de notificações por e-mail. O repositório é multi-módulo Maven, gera artefatos nativos Quarkus para AWS Lambda e publica as rotas pelo HTTP API Gateway do laboratório.
+Lambdas da suíte Oficina para autenticação, sincronização assíncrona de usuários, emissão de JWT, publicação de metadados OIDC/JWKS e envio de notificações por e-mail. O repositório é multi-módulo Maven, gera artefatos nativos Quarkus para AWS Lambda e integra HTTP API Gateway e SQS no laboratório.
 
 ## Tecnologias utilizadas
 
@@ -13,7 +13,7 @@ Lambdas HTTP da suíte Oficina para autenticação, emissão de JWT, publicaçã
 - SmallRye JWT e BCrypt
 - Panache/Hibernate ORM para autenticação com PostgreSQL
 - Quarkus Mailer para notificação
-- AWS Lambda, API Gateway HTTP API, Secrets Manager, S3 e VPC
+- AWS Lambda, API Gateway HTTP API, SNS/SQS, Secrets Manager, S3 e VPC
 - OpenTelemetry, Micrometer e logs JSON
 - GitHub Actions e scripts Bash em `scripts/`
 
@@ -39,8 +39,8 @@ Repositório multi-módulo Maven da suíte Oficina para as Lambdas HTTP de auten
 - `auth-sync-lambda`
   - sincronização assíncrona de usuários operacionais a partir dos eventos do `oficina-os-service`
   - consumo idempotente por SQS
-- não há módulo Java compartilhado entre as três Lambdas
-  - o reuso ficou concentrado no `pom.xml` pai, scripts e workflows
+- `auth-common`
+  - resolução compartilhada de credenciais do PostgreSQL pelo AWS Secrets Manager
 
 ```mermaid
 flowchart LR
@@ -87,6 +87,7 @@ O cadastro operacional pertence ao `oficina-os-service`; a `auth-sync-lambda` ma
 ## Estrutura do repositório
 
 - `pom.xml`: POM pai com versão única do repositório
+- `auth-common/`: configuração compartilhada de Secrets Manager
 - `auth-lambda/`: aplicação Quarkus da Lambda de autenticação
 - `auth-sync-lambda/`: consumidor assíncrono que projeta usuários e papéis no store de autenticação
 - `notificacao-lambda/`: aplicação Quarkus da Lambda de notificação
@@ -104,6 +105,7 @@ POST /auth/token
 GET /auth/usuarios/{usuarioId}/credencial
 GET /auth/dashboard/credenciais
 POST /auth/usuarios/{usuarioId}/ativacao
+POST /auth/ativacoes
 GET /.well-known/openid-configuration
 GET /.well-known/jwks.json
 ```
@@ -252,7 +254,9 @@ Defaults operacionais:
   - função padrão: `oficina-auth-sync-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-auth-sync-lambda`
   - consome eventos de usuário e atualiza a projeção no mesmo PostgreSQL da autenticação
-  - não publica rotas no API Gateway; os event source mappings são habilitados somente após o pacote funcional ser implantado
+  - não publica rotas no API Gateway
+  - cria ou atualiza os event source mappings das três filas canônicas com `ReportBatchItemFailures`
+  - não executa o bootstrap do schema
 - `notificacao-lambda`
   - função padrão: `oficina-notificacao-lambda-lab`
   - prefixo S3 padrão: `oficina/lab/lambda/oficina-notificacao-lambda`

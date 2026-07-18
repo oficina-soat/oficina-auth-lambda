@@ -7,12 +7,17 @@
     <parent>
         <groupId>br.com.oficina</groupId>
         <artifactId>oficina-lambda-parent</artifactId>
-        <version>1.4.0</version>
+        <version>1.4.1</version>
     </parent>
 
     <artifactId>auth-lambda</artifactId>
 
     <dependencies>
+        <dependency>
+            <groupId>br.com.oficina</groupId>
+            <artifactId>auth-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>

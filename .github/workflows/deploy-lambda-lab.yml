@@ -413,6 +413,7 @@ jobs:
       - build_native_artifacts
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         module:
           - auth-lambda
@@ -465,6 +466,8 @@ jobs:
       AUTH_SYNC_LAMBDA_ROLE_ARN: ${{ secrets.AUTH_SYNC_LAMBDA_ROLE_ARN || secrets.LAMBDA_ROLE_ARN }}
       AUTH_SYNC_LAMBDA_ROLE_NAME: ${{ vars.AUTH_SYNC_LAMBDA_ROLE_NAME || vars.LAMBDA_ROLE_NAME || 'LabRole' }}
       AUTH_SYNC_LAMBDA_SECURITY_GROUP_NAME: ${{ vars.AUTH_SYNC_LAMBDA_SECURITY_GROUP_NAME }}
+      AUTH_SYNC_LAMBDA_SQS_QUEUE_NAMES: ${{ vars.AUTH_SYNC_LAMBDA_SQS_QUEUE_NAMES || 'oficina-os-usuario-adicionado-oficina-auth-sync-lambda;oficina-os-usuario-atualizado-oficina-auth-sync-lambda;oficina-os-usuario-excluido-oficina-auth-sync-lambda' }}
+      AUTH_SYNC_LAMBDA_SQS_BATCH_SIZE: ${{ vars.AUTH_SYNC_LAMBDA_SQS_BATCH_SIZE || '10' }}
       AUTH_SYNC_LAMBDA_SUBNET_IDS: ${{ vars.AUTH_SYNC_LAMBDA_SUBNET_IDS || vars.LAMBDA_SUBNET_IDS }}
       AUTH_SYNC_LAMBDA_TIMEOUT: ${{ vars.AUTH_SYNC_LAMBDA_TIMEOUT || '30' }}
       AUTH_SYNC_LAMBDA_VPC_ID: ${{ vars.AUTH_SYNC_LAMBDA_VPC_ID || vars.LAMBDA_VPC_ID }}
