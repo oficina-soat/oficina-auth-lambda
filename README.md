@@ -336,6 +336,7 @@ Resumo do fluxo:
   - builda nativamente apenas os artefatos versionados ausentes
   - cria a Lambda quando a função ainda não existe
   - atualiza a Lambda quando a versão registrada em `OFICINA_LAMBDA_ARTIFACT_VERSION` não bate com o `pom.xml`
+  - preserva os assets imutáveis quando a release da versão já está completa e publica somente assets ausentes em releases parciais
   - falha antes do build se a AWS exigir novo artefato e o push em `main` não tiver incrementado a versão
 
 O workflow também pode ser executado manualmente em `main`, com `lambda_target=all|auth-lambda|auth-sync-lambda|notificacao-lambda`.
