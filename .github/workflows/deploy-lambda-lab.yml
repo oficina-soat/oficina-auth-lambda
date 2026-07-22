@@ -588,7 +588,53 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Resolve GitHub release state
+        id: release
+        shell: bash
+        env:
+          SELECTED_MODULES: ${{ needs.resolve_aws_state.outputs.selected_modules_csv }}
+        run: |
+          set -euo pipefail
+
+          source ./scripts/lambda-modules.sh
+
+          tag="v${LAMBDA_RELEASE_VERSION}"
+          release_json=""
+          release_error="$(mktemp)"
+          if release_json="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets 2>"${release_error}")"; then
+            rm -f "${release_error}"
+          elif grep -Eqi 'release not found|HTTP 404|Not Found' "${release_error}"; then
+            rm -f "${release_error}"
+            echo "complete=false" >> "${GITHUB_OUTPUT}"
+            echo "Release ${tag} ainda nao existe; os assets serao publicados."
+            exit 0
+          else
+            cat "${release_error}" >&2
+            rm -f "${release_error}"
+            exit 1
+          fi
+
+          complete="true"
+          for module in ${SELECTED_MODULES//,/ }; do
+            asset_name="$(lambda_release_asset_name "${module}" "${LAMBDA_RELEASE_VERSION}" "${LAMBDA_ARCHITECTURE}")"
+            if ! jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' <<< "${release_json}" >/dev/null; then
+              complete="false"
+              echo "Asset ${asset_name} ainda nao foi publicado na release ${tag}."
+            fi
+          done
+
+          if ! jq -e 'any(.assets[]?; .name == "SHA256SUMS")' <<< "${release_json}" >/dev/null; then
+            complete="false"
+            echo "Asset SHA256SUMS ainda nao foi publicado na release ${tag}."
+          fi
+
+          echo "complete=${complete}" >> "${GITHUB_OUTPUT}"
+          if [[ "${complete}" == "true" ]]; then
+            echo "Release ${tag} ja esta completa; os assets imutaveis serao preservados."
+          fi
+
       - name: Configure AWS credentials
+        if: steps.release.outputs.complete != 'true'
         uses: aws-actions/configure-aws-credentials@v6.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -597,6 +643,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - name: Restore versioned packages from S3
+        if: steps.release.outputs.complete != 'true'
         shell: bash
         env:
           SELECTED_MODULES: ${{ needs.resolve_aws_state.outputs.selected_modules_csv }}
@@ -619,38 +666,38 @@ jobs:
           )
 
       - name: Create release and publish immutable assets
+        if: steps.release.outputs.complete != 'true'
         shell: bash
         run: |
           set -euo pipefail
 
           tag="v${LAMBDA_RELEASE_VERSION}"
           release_dir=".tmp/github-release"
-          existing_dir=".tmp/github-release-existing"
-          mkdir -p "${existing_dir}"
+          release_json=""
+          release_error="$(mktemp)"
 
-          if ! gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          if release_json="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets 2>"${release_error}")"; then
+            rm -f "${release_error}"
+          elif grep -Eqi 'release not found|HTTP 404|Not Found' "${release_error}"; then
+            rm -f "${release_error}"
             gh release create "${tag}" \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "Oficina Auth Lambdas ${tag}" \
               --generate-notes
+            release_json='{"assets":[]}'
+          else
+            cat "${release_error}" >&2
+            rm -f "${release_error}"
+            exit 1
           fi
 
           for asset_path in "${release_dir}"/*.zip "${release_dir}/SHA256SUMS"; do
             asset_name="$(basename "${asset_path}")"
-            existing_path="${existing_dir}/${asset_name}"
 
-            if gh release download "${tag}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern "${asset_name}" \
-              --dir "${existing_dir}" >/dev/null 2>&1; then
-              if cmp --silent "${asset_path}" "${existing_path}"; then
-                echo "Asset ${asset_name} ja publicado com conteudo identico."
-                continue
-              fi
-
-              echo "Asset imutavel ${asset_name} ja existe com conteudo diferente na release ${tag}." >&2
-              exit 1
+            if jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' <<< "${release_json}" >/dev/null; then
+              echo "Asset imutavel ${asset_name} ja publicado; preservando o conteudo existente."
+              continue
             fi
 
             gh release upload "${tag}" "${asset_path}" --repo "${GITHUB_REPOSITORY}"
