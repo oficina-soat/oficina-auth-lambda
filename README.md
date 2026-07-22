@@ -84,6 +84,61 @@ flowchart LR
 
 O cadastro operacional pertence ao `oficina-os-service`; a `auth-sync-lambda` mantém somente a projeção necessária para login e autorização. As duas Lambdas de autenticação compartilham exclusivamente o database `oficina_auth`, a role `oficina_auth_user` e o secret JSON `oficina/lab/database/oficina-auth-lambda`.
 
+## Fluxos de autenticação, ativação e notificação
+
+```mermaid
+sequenceDiagram
+  actor U as Usuário
+  participant UI as oficina-ui
+  participant AU as auth-lambda
+  participant API as Microsserviço protegido
+  U->>UI: CPF e senha
+  UI->>AU: POST /auth/token
+  AU->>AU: valida credencial, status e grupos/papéis
+  AU-->>UI: JWT assinado
+  UI->>API: Bearer JWT
+  API->>API: valida issuer, audience, JWKS e papel
+  API-->>UI: resposta ou erro 401/403
+```
+
+```mermaid
+sequenceDiagram
+  participant OS as oficina-os-service
+  participant SNS as SNS / SQS
+  participant SY as auth-sync-lambda
+  participant AU as auth-lambda
+  actor A as Administrador
+  actor U as Usuário
+  participant UI as oficina-ui
+  OS-->>SNS: usuarioAdicionado
+  SNS-->>SY: snapshot operacional sem senha
+  SY->>SY: cria projeção pendente
+  A->>UI: solicita ativação
+  UI->>AU: emite token com expiração e uso único
+  AU-->>UI: token exibido uma única vez
+  A-->>U: entrega por canal controlado
+  U->>UI: informa token e senha
+  UI->>AU: conclui ativação
+  alt token vigente e não consumido
+    AU->>AU: ativa credencial e invalida token
+    AU-->>UI: sucesso
+  else expirado ou reutilizado
+    AU-->>UI: erro canônico
+  end
+```
+
+```mermaid
+sequenceDiagram
+  participant BI as oficina-billing-service
+  participant NO as notificacao-lambda
+  actor C as Cliente
+  BI->>NO: POST /notificacoes/email com o link unificado
+  NO-->>C: entrega um e-mail de decisão do orçamento
+  NO-->>BI: aceite ou falha de entrega
+```
+
+A `notificacao-lambda` transporta o conteúdo, mas não conhece nem decide aprovação, recusa ou validade da capability. A colaboração completa está na [visão transversal da plataforma](../oficina-platform/README.md#fluxos-operacionais).
+
 ## Estrutura do repositório
 
 - `pom.xml`: POM pai com versão única do repositório
